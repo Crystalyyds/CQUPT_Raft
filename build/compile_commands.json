@@ -1,0 +1,8 @@
+[
+{
+  "directory": "/home/yangjilei/Code/C++/CQUPT_Raft/build",
+  "command": "/usr/bin/c++   -g -o CMakeFiles/CQUPT_Raft.dir/main.cpp.o -c /home/yangjilei/Code/C++/CQUPT_Raft/main.cpp",
+  "file": "/home/yangjilei/Code/C++/CQUPT_Raft/main.cpp",
+  "output": "CMakeFiles/CQUPT_Raft.dir/main.cpp.o"
+}
+]
