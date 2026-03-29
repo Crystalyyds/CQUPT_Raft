@@ -1,8 +1,44 @@
 [
 {
   "directory": "/home/yangjilei/Code/C++/CQUPT_Raft/build",
-  "command": "/usr/bin/c++   -g -o CMakeFiles/CQUPT_Raft.dir/main.cpp.o -c /home/yangjilei/Code/C++/CQUPT_Raft/main.cpp",
-  "file": "/home/yangjilei/Code/C++/CQUPT_Raft/main.cpp",
-  "output": "CMakeFiles/CQUPT_Raft.dir/main.cpp.o"
+  "command": "/usr/bin/c++  -I/home/yangjilei/Code/C++/CQUPT_Raft/build/generated -isystem /home/yangjilei/Code/C++/CQUPT_Raft/build/vcpkg_installed/x64-linux/include -g -std=c++20 -o CMakeFiles/raft_proto.dir/generated/raft.pb.cc.o -c /home/yangjilei/Code/C++/CQUPT_Raft/build/generated/raft.pb.cc",
+  "file": "/home/yangjilei/Code/C++/CQUPT_Raft/build/generated/raft.pb.cc",
+  "output": "CMakeFiles/raft_proto.dir/generated/raft.pb.cc.o"
+},
+{
+  "directory": "/home/yangjilei/Code/C++/CQUPT_Raft/build",
+  "command": "/usr/bin/c++  -I/home/yangjilei/Code/C++/CQUPT_Raft/build/generated -isystem /home/yangjilei/Code/C++/CQUPT_Raft/build/vcpkg_installed/x64-linux/include -g -std=c++20 -o CMakeFiles/raft_proto.dir/generated/raft.grpc.pb.cc.o -c /home/yangjilei/Code/C++/CQUPT_Raft/build/generated/raft.grpc.pb.cc",
+  "file": "/home/yangjilei/Code/C++/CQUPT_Raft/build/generated/raft.grpc.pb.cc",
+  "output": "CMakeFiles/raft_proto.dir/generated/raft.grpc.pb.cc.o"
+},
+{
+  "directory": "/home/yangjilei/Code/C++/CQUPT_Raft/build",
+  "command": "/usr/bin/c++  -I/home/yangjilei/Code/C++/CQUPT_Raft/include -I/home/yangjilei/Code/C++/CQUPT_Raft/build/generated -isystem /home/yangjilei/Code/C++/CQUPT_Raft/build/vcpkg_installed/x64-linux/include -g -std=c++20 -o CMakeFiles/raft_core.dir/src/min_heap_timer.cpp.o -c /home/yangjilei/Code/C++/CQUPT_Raft/src/min_heap_timer.cpp",
+  "file": "/home/yangjilei/Code/C++/CQUPT_Raft/src/min_heap_timer.cpp",
+  "output": "CMakeFiles/raft_core.dir/src/min_heap_timer.cpp.o"
+},
+{
+  "directory": "/home/yangjilei/Code/C++/CQUPT_Raft/build",
+  "command": "/usr/bin/c++  -I/home/yangjilei/Code/C++/CQUPT_Raft/include -I/home/yangjilei/Code/C++/CQUPT_Raft/build/generated -isystem /home/yangjilei/Code/C++/CQUPT_Raft/build/vcpkg_installed/x64-linux/include -g -std=c++20 -o CMakeFiles/raft_core.dir/src/thread_pool.cpp.o -c /home/yangjilei/Code/C++/CQUPT_Raft/src/thread_pool.cpp",
+  "file": "/home/yangjilei/Code/C++/CQUPT_Raft/src/thread_pool.cpp",
+  "output": "CMakeFiles/raft_core.dir/src/thread_pool.cpp.o"
+},
+{
+  "directory": "/home/yangjilei/Code/C++/CQUPT_Raft/build",
+  "command": "/usr/bin/c++  -I/home/yangjilei/Code/C++/CQUPT_Raft/include -I/home/yangjilei/Code/C++/CQUPT_Raft/build/generated -isystem /home/yangjilei/Code/C++/CQUPT_Raft/build/vcpkg_installed/x64-linux/include -g -std=c++20 -o CMakeFiles/raft_core.dir/src/raft_node.cpp.o -c /home/yangjilei/Code/C++/CQUPT_Raft/src/raft_node.cpp",
+  "file": "/home/yangjilei/Code/C++/CQUPT_Raft/src/raft_node.cpp",
+  "output": "CMakeFiles/raft_core.dir/src/raft_node.cpp.o"
+},
+{
+  "directory": "/home/yangjilei/Code/C++/CQUPT_Raft/build",
+  "command": "/usr/bin/c++  -I/home/yangjilei/Code/C++/CQUPT_Raft/include -I/home/yangjilei/Code/C++/CQUPT_Raft/build/generated -isystem /home/yangjilei/Code/C++/CQUPT_Raft/build/vcpkg_installed/x64-linux/include -g -std=c++20 -o CMakeFiles/raft_core.dir/src/raft_service_impl.cpp.o -c /home/yangjilei/Code/C++/CQUPT_Raft/src/raft_service_impl.cpp",
+  "file": "/home/yangjilei/Code/C++/CQUPT_Raft/src/raft_service_impl.cpp",
+  "output": "CMakeFiles/raft_core.dir/src/raft_service_impl.cpp.o"
+},
+{
+  "directory": "/home/yangjilei/Code/C++/CQUPT_Raft/build",
+  "command": "/usr/bin/c++  -I/home/yangjilei/Code/C++/CQUPT_Raft/include -I/home/yangjilei/Code/C++/CQUPT_Raft/build/generated -isystem /home/yangjilei/Code/C++/CQUPT_Raft/build/vcpkg_installed/x64-linux/include -g -std=c++20 -o CMakeFiles/raft_demo.dir/src/main.cpp.o -c /home/yangjilei/Code/C++/CQUPT_Raft/src/main.cpp",
+  "file": "/home/yangjilei/Code/C++/CQUPT_Raft/src/main.cpp",
+  "output": "CMakeFiles/raft_demo.dir/src/main.cpp.o"
 }
 ]

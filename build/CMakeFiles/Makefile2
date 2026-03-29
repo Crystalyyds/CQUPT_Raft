@@ -63,7 +63,9 @@ CMAKE_BINARY_DIR = /home/yangjilei/Code/C++/CQUPT_Raft/build
 # Directory level rules for the build root directory
 
 # The main recursive "all" target.
-all: CMakeFiles/CQUPT_Raft.dir/all
+all: CMakeFiles/raft_proto.dir/all
+all: CMakeFiles/raft_core.dir/all
+all: CMakeFiles/raft_demo.dir/all
 .PHONY : all
 
 # The main recursive "preinstall" target.
@@ -71,34 +73,89 @@ preinstall:
 .PHONY : preinstall
 
 # The main recursive "clean" target.
-clean: CMakeFiles/CQUPT_Raft.dir/clean
+clean: CMakeFiles/raft_proto.dir/clean
+clean: CMakeFiles/raft_core.dir/clean
+clean: CMakeFiles/raft_demo.dir/clean
 .PHONY : clean
 
 #=============================================================================
-# Target rules for target CMakeFiles/CQUPT_Raft.dir
+# Target rules for target CMakeFiles/raft_proto.dir
 
 # All Build rule for target.
-CMakeFiles/CQUPT_Raft.dir/all:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/CQUPT_Raft.dir/build.make CMakeFiles/CQUPT_Raft.dir/depend
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/CQUPT_Raft.dir/build.make CMakeFiles/CQUPT_Raft.dir/build
-	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --progress-dir=/home/yangjilei/Code/C++/CQUPT_Raft/build/CMakeFiles --progress-num=1,2 "Built target CQUPT_Raft"
-.PHONY : CMakeFiles/CQUPT_Raft.dir/all
+CMakeFiles/raft_proto.dir/all:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/raft_proto.dir/build.make CMakeFiles/raft_proto.dir/depend
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/raft_proto.dir/build.make CMakeFiles/raft_proto.dir/build
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --progress-dir=/home/yangjilei/Code/C++/CQUPT_Raft/build/CMakeFiles --progress-num=8,9,10,11 "Built target raft_proto"
+.PHONY : CMakeFiles/raft_proto.dir/all
 
 # Build rule for subdir invocation for target.
-CMakeFiles/CQUPT_Raft.dir/rule: cmake_check_build_system
-	$(CMAKE_COMMAND) -E cmake_progress_start /home/yangjilei/Code/C++/CQUPT_Raft/build/CMakeFiles 2
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 CMakeFiles/CQUPT_Raft.dir/all
+CMakeFiles/raft_proto.dir/rule: cmake_check_build_system
+	$(CMAKE_COMMAND) -E cmake_progress_start /home/yangjilei/Code/C++/CQUPT_Raft/build/CMakeFiles 4
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 CMakeFiles/raft_proto.dir/all
 	$(CMAKE_COMMAND) -E cmake_progress_start /home/yangjilei/Code/C++/CQUPT_Raft/build/CMakeFiles 0
-.PHONY : CMakeFiles/CQUPT_Raft.dir/rule
+.PHONY : CMakeFiles/raft_proto.dir/rule
 
 # Convenience name for target.
-CQUPT_Raft: CMakeFiles/CQUPT_Raft.dir/rule
-.PHONY : CQUPT_Raft
+raft_proto: CMakeFiles/raft_proto.dir/rule
+.PHONY : raft_proto
 
 # clean rule for target.
-CMakeFiles/CQUPT_Raft.dir/clean:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/CQUPT_Raft.dir/build.make CMakeFiles/CQUPT_Raft.dir/clean
-.PHONY : CMakeFiles/CQUPT_Raft.dir/clean
+CMakeFiles/raft_proto.dir/clean:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/raft_proto.dir/build.make CMakeFiles/raft_proto.dir/clean
+.PHONY : CMakeFiles/raft_proto.dir/clean
+
+#=============================================================================
+# Target rules for target CMakeFiles/raft_core.dir
+
+# All Build rule for target.
+CMakeFiles/raft_core.dir/all: CMakeFiles/raft_proto.dir/all
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/raft_core.dir/build.make CMakeFiles/raft_core.dir/depend
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/raft_core.dir/build.make CMakeFiles/raft_core.dir/build
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --progress-dir=/home/yangjilei/Code/C++/CQUPT_Raft/build/CMakeFiles --progress-num=1,2,3,4,5 "Built target raft_core"
+.PHONY : CMakeFiles/raft_core.dir/all
+
+# Build rule for subdir invocation for target.
+CMakeFiles/raft_core.dir/rule: cmake_check_build_system
+	$(CMAKE_COMMAND) -E cmake_progress_start /home/yangjilei/Code/C++/CQUPT_Raft/build/CMakeFiles 9
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 CMakeFiles/raft_core.dir/all
+	$(CMAKE_COMMAND) -E cmake_progress_start /home/yangjilei/Code/C++/CQUPT_Raft/build/CMakeFiles 0
+.PHONY : CMakeFiles/raft_core.dir/rule
+
+# Convenience name for target.
+raft_core: CMakeFiles/raft_core.dir/rule
+.PHONY : raft_core
+
+# clean rule for target.
+CMakeFiles/raft_core.dir/clean:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/raft_core.dir/build.make CMakeFiles/raft_core.dir/clean
+.PHONY : CMakeFiles/raft_core.dir/clean
+
+#=============================================================================
+# Target rules for target CMakeFiles/raft_demo.dir
+
+# All Build rule for target.
+CMakeFiles/raft_demo.dir/all: CMakeFiles/raft_proto.dir/all
+CMakeFiles/raft_demo.dir/all: CMakeFiles/raft_core.dir/all
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/raft_demo.dir/build.make CMakeFiles/raft_demo.dir/depend
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/raft_demo.dir/build.make CMakeFiles/raft_demo.dir/build
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --progress-dir=/home/yangjilei/Code/C++/CQUPT_Raft/build/CMakeFiles --progress-num=6,7 "Built target raft_demo"
+.PHONY : CMakeFiles/raft_demo.dir/all
+
+# Build rule for subdir invocation for target.
+CMakeFiles/raft_demo.dir/rule: cmake_check_build_system
+	$(CMAKE_COMMAND) -E cmake_progress_start /home/yangjilei/Code/C++/CQUPT_Raft/build/CMakeFiles 11
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 CMakeFiles/raft_demo.dir/all
+	$(CMAKE_COMMAND) -E cmake_progress_start /home/yangjilei/Code/C++/CQUPT_Raft/build/CMakeFiles 0
+.PHONY : CMakeFiles/raft_demo.dir/rule
+
+# Convenience name for target.
+raft_demo: CMakeFiles/raft_demo.dir/rule
+.PHONY : raft_demo
+
+# clean rule for target.
+CMakeFiles/raft_demo.dir/clean:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/raft_demo.dir/build.make CMakeFiles/raft_demo.dir/clean
+.PHONY : CMakeFiles/raft_demo.dir/clean
 
 #=============================================================================
 # Special targets to cleanup operation of make.

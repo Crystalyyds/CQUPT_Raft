@@ -117,41 +117,211 @@ depend:
 .PHONY : depend
 
 #=============================================================================
-# Target rules for targets named CQUPT_Raft
+# Target rules for targets named raft_proto
 
 # Build rule for target.
-CQUPT_Raft: cmake_check_build_system
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 CQUPT_Raft
-.PHONY : CQUPT_Raft
+raft_proto: cmake_check_build_system
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 raft_proto
+.PHONY : raft_proto
 
 # fast build rule for target.
-CQUPT_Raft/fast:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/CQUPT_Raft.dir/build.make CMakeFiles/CQUPT_Raft.dir/build
-.PHONY : CQUPT_Raft/fast
+raft_proto/fast:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/raft_proto.dir/build.make CMakeFiles/raft_proto.dir/build
+.PHONY : raft_proto/fast
 
-main.o: main.cpp.o
-.PHONY : main.o
+#=============================================================================
+# Target rules for targets named raft_core
+
+# Build rule for target.
+raft_core: cmake_check_build_system
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 raft_core
+.PHONY : raft_core
+
+# fast build rule for target.
+raft_core/fast:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/raft_core.dir/build.make CMakeFiles/raft_core.dir/build
+.PHONY : raft_core/fast
+
+#=============================================================================
+# Target rules for targets named raft_demo
+
+# Build rule for target.
+raft_demo: cmake_check_build_system
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 raft_demo
+.PHONY : raft_demo
+
+# fast build rule for target.
+raft_demo/fast:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/raft_demo.dir/build.make CMakeFiles/raft_demo.dir/build
+.PHONY : raft_demo/fast
+
+generated/raft.grpc.pb.o: generated/raft.grpc.pb.cc.o
+.PHONY : generated/raft.grpc.pb.o
 
 # target to build an object file
-main.cpp.o:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/CQUPT_Raft.dir/build.make CMakeFiles/CQUPT_Raft.dir/main.cpp.o
-.PHONY : main.cpp.o
+generated/raft.grpc.pb.cc.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/raft_proto.dir/build.make CMakeFiles/raft_proto.dir/generated/raft.grpc.pb.cc.o
+.PHONY : generated/raft.grpc.pb.cc.o
 
-main.i: main.cpp.i
-.PHONY : main.i
+generated/raft.grpc.pb.i: generated/raft.grpc.pb.cc.i
+.PHONY : generated/raft.grpc.pb.i
 
 # target to preprocess a source file
-main.cpp.i:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/CQUPT_Raft.dir/build.make CMakeFiles/CQUPT_Raft.dir/main.cpp.i
-.PHONY : main.cpp.i
+generated/raft.grpc.pb.cc.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/raft_proto.dir/build.make CMakeFiles/raft_proto.dir/generated/raft.grpc.pb.cc.i
+.PHONY : generated/raft.grpc.pb.cc.i
 
-main.s: main.cpp.s
-.PHONY : main.s
+generated/raft.grpc.pb.s: generated/raft.grpc.pb.cc.s
+.PHONY : generated/raft.grpc.pb.s
 
 # target to generate assembly for a file
-main.cpp.s:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/CQUPT_Raft.dir/build.make CMakeFiles/CQUPT_Raft.dir/main.cpp.s
-.PHONY : main.cpp.s
+generated/raft.grpc.pb.cc.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/raft_proto.dir/build.make CMakeFiles/raft_proto.dir/generated/raft.grpc.pb.cc.s
+.PHONY : generated/raft.grpc.pb.cc.s
+
+generated/raft.pb.o: generated/raft.pb.cc.o
+.PHONY : generated/raft.pb.o
+
+# target to build an object file
+generated/raft.pb.cc.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/raft_proto.dir/build.make CMakeFiles/raft_proto.dir/generated/raft.pb.cc.o
+.PHONY : generated/raft.pb.cc.o
+
+generated/raft.pb.i: generated/raft.pb.cc.i
+.PHONY : generated/raft.pb.i
+
+# target to preprocess a source file
+generated/raft.pb.cc.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/raft_proto.dir/build.make CMakeFiles/raft_proto.dir/generated/raft.pb.cc.i
+.PHONY : generated/raft.pb.cc.i
+
+generated/raft.pb.s: generated/raft.pb.cc.s
+.PHONY : generated/raft.pb.s
+
+# target to generate assembly for a file
+generated/raft.pb.cc.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/raft_proto.dir/build.make CMakeFiles/raft_proto.dir/generated/raft.pb.cc.s
+.PHONY : generated/raft.pb.cc.s
+
+src/main.o: src/main.cpp.o
+.PHONY : src/main.o
+
+# target to build an object file
+src/main.cpp.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/raft_demo.dir/build.make CMakeFiles/raft_demo.dir/src/main.cpp.o
+.PHONY : src/main.cpp.o
+
+src/main.i: src/main.cpp.i
+.PHONY : src/main.i
+
+# target to preprocess a source file
+src/main.cpp.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/raft_demo.dir/build.make CMakeFiles/raft_demo.dir/src/main.cpp.i
+.PHONY : src/main.cpp.i
+
+src/main.s: src/main.cpp.s
+.PHONY : src/main.s
+
+# target to generate assembly for a file
+src/main.cpp.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/raft_demo.dir/build.make CMakeFiles/raft_demo.dir/src/main.cpp.s
+.PHONY : src/main.cpp.s
+
+src/min_heap_timer.o: src/min_heap_timer.cpp.o
+.PHONY : src/min_heap_timer.o
+
+# target to build an object file
+src/min_heap_timer.cpp.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/raft_core.dir/build.make CMakeFiles/raft_core.dir/src/min_heap_timer.cpp.o
+.PHONY : src/min_heap_timer.cpp.o
+
+src/min_heap_timer.i: src/min_heap_timer.cpp.i
+.PHONY : src/min_heap_timer.i
+
+# target to preprocess a source file
+src/min_heap_timer.cpp.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/raft_core.dir/build.make CMakeFiles/raft_core.dir/src/min_heap_timer.cpp.i
+.PHONY : src/min_heap_timer.cpp.i
+
+src/min_heap_timer.s: src/min_heap_timer.cpp.s
+.PHONY : src/min_heap_timer.s
+
+# target to generate assembly for a file
+src/min_heap_timer.cpp.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/raft_core.dir/build.make CMakeFiles/raft_core.dir/src/min_heap_timer.cpp.s
+.PHONY : src/min_heap_timer.cpp.s
+
+src/raft_node.o: src/raft_node.cpp.o
+.PHONY : src/raft_node.o
+
+# target to build an object file
+src/raft_node.cpp.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/raft_core.dir/build.make CMakeFiles/raft_core.dir/src/raft_node.cpp.o
+.PHONY : src/raft_node.cpp.o
+
+src/raft_node.i: src/raft_node.cpp.i
+.PHONY : src/raft_node.i
+
+# target to preprocess a source file
+src/raft_node.cpp.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/raft_core.dir/build.make CMakeFiles/raft_core.dir/src/raft_node.cpp.i
+.PHONY : src/raft_node.cpp.i
+
+src/raft_node.s: src/raft_node.cpp.s
+.PHONY : src/raft_node.s
+
+# target to generate assembly for a file
+src/raft_node.cpp.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/raft_core.dir/build.make CMakeFiles/raft_core.dir/src/raft_node.cpp.s
+.PHONY : src/raft_node.cpp.s
+
+src/raft_service_impl.o: src/raft_service_impl.cpp.o
+.PHONY : src/raft_service_impl.o
+
+# target to build an object file
+src/raft_service_impl.cpp.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/raft_core.dir/build.make CMakeFiles/raft_core.dir/src/raft_service_impl.cpp.o
+.PHONY : src/raft_service_impl.cpp.o
+
+src/raft_service_impl.i: src/raft_service_impl.cpp.i
+.PHONY : src/raft_service_impl.i
+
+# target to preprocess a source file
+src/raft_service_impl.cpp.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/raft_core.dir/build.make CMakeFiles/raft_core.dir/src/raft_service_impl.cpp.i
+.PHONY : src/raft_service_impl.cpp.i
+
+src/raft_service_impl.s: src/raft_service_impl.cpp.s
+.PHONY : src/raft_service_impl.s
+
+# target to generate assembly for a file
+src/raft_service_impl.cpp.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/raft_core.dir/build.make CMakeFiles/raft_core.dir/src/raft_service_impl.cpp.s
+.PHONY : src/raft_service_impl.cpp.s
+
+src/thread_pool.o: src/thread_pool.cpp.o
+.PHONY : src/thread_pool.o
+
+# target to build an object file
+src/thread_pool.cpp.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/raft_core.dir/build.make CMakeFiles/raft_core.dir/src/thread_pool.cpp.o
+.PHONY : src/thread_pool.cpp.o
+
+src/thread_pool.i: src/thread_pool.cpp.i
+.PHONY : src/thread_pool.i
+
+# target to preprocess a source file
+src/thread_pool.cpp.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/raft_core.dir/build.make CMakeFiles/raft_core.dir/src/thread_pool.cpp.i
+.PHONY : src/thread_pool.cpp.i
+
+src/thread_pool.s: src/thread_pool.cpp.s
+.PHONY : src/thread_pool.s
+
+# target to generate assembly for a file
+src/thread_pool.cpp.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/raft_core.dir/build.make CMakeFiles/raft_core.dir/src/thread_pool.cpp.s
+.PHONY : src/thread_pool.cpp.s
 
 # Help Target
 help:
@@ -161,10 +331,30 @@ help:
 	@echo "... depend"
 	@echo "... edit_cache"
 	@echo "... rebuild_cache"
-	@echo "... CQUPT_Raft"
-	@echo "... main.o"
-	@echo "... main.i"
-	@echo "... main.s"
+	@echo "... raft_core"
+	@echo "... raft_demo"
+	@echo "... raft_proto"
+	@echo "... generated/raft.grpc.pb.o"
+	@echo "... generated/raft.grpc.pb.i"
+	@echo "... generated/raft.grpc.pb.s"
+	@echo "... generated/raft.pb.o"
+	@echo "... generated/raft.pb.i"
+	@echo "... generated/raft.pb.s"
+	@echo "... src/main.o"
+	@echo "... src/main.i"
+	@echo "... src/main.s"
+	@echo "... src/min_heap_timer.o"
+	@echo "... src/min_heap_timer.i"
+	@echo "... src/min_heap_timer.s"
+	@echo "... src/raft_node.o"
+	@echo "... src/raft_node.i"
+	@echo "... src/raft_node.s"
+	@echo "... src/raft_service_impl.o"
+	@echo "... src/raft_service_impl.i"
+	@echo "... src/raft_service_impl.s"
+	@echo "... src/thread_pool.o"
+	@echo "... src/thread_pool.i"
+	@echo "... src/thread_pool.s"
 .PHONY : help
 
 
