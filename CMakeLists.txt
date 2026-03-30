@@ -71,6 +71,7 @@ target_link_libraries(raft_proto
 add_library(raft_core
   src/min_heap_timer.cpp
   src/thread_pool.cpp
+  src/command.cpp
   src/raft_node.cpp
   src/raft_service_impl.cpp
 )

@@ -17,6 +17,9 @@
 #include "raft/config.h"
 #include "raft/min_heap_timer.h"
 #include "raft/thread_pool.h"
+#include "raft/command.h"
+#include "raft/propose.h"
+#include "raft/state_machine.h"
 
 namespace raftdemo
 {
@@ -52,10 +55,14 @@ namespace raftdemo
                          raft::AppendEntriesResponse *response);
 
     std::string Describe() const;
+    // 客户端提案入口。上层业务应通过这个接口把一条业务命令提交给当前节点。
+    ProposeResult Propose(const Command &command);
 
   private:
     struct PeerClient
     {
+      int peer_id{0};
+      std::string address;
       std::shared_ptr<grpc::Channel> channel;
       std::unique_ptr<raft::RaftService::Stub> stub;
       std::mutex mu;
@@ -86,6 +93,16 @@ namespace raftdemo
         int peer_id, const raft::AppendEntriesRequest &request);
 
     static const char *RoleName(Role role);
+    // 在持锁条件下校验命令是否合法。这里只做命令本身的合法性检查
+    bool ValidateCommandUnlocked(const Command &command, std::string *reason) const;
+    // 在持锁条件下将命令追加到本地日志
+    std::uint64_t AppendLocalLogUnlocked(const std::string &command_data);
+    // 将指定日志项复制到多数派节点。
+    bool ReplicateLogEntryToMajority(std::uint64_t log_index);
+    // 在持锁条件下推进提交下标。
+    void AdvanceCommitIndexUnlocked();
+    // 将已提交但尚未执行的日志应用到状态机。
+    void ApplyCommittedEntries();
 
     NodeConfig config_;
 
@@ -114,6 +131,8 @@ namespace raftdemo
 
     std::unique_ptr<RaftServiceImpl> service_;
     std::unique_ptr<grpc::Server> server_;
-  };
+    // 当前节点绑定的状态机实例
+    std::unique_ptr<IStateMachine> state_machine_;
+    };
 
 } // namespace raftdemo

@@ -203,6 +203,30 @@ generated/raft.pb.cc.s:
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/raft_proto.dir/build.make CMakeFiles/raft_proto.dir/generated/raft.pb.cc.s
 .PHONY : generated/raft.pb.cc.s
 
+src/command.o: src/command.cpp.o
+.PHONY : src/command.o
+
+# target to build an object file
+src/command.cpp.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/raft_core.dir/build.make CMakeFiles/raft_core.dir/src/command.cpp.o
+.PHONY : src/command.cpp.o
+
+src/command.i: src/command.cpp.i
+.PHONY : src/command.i
+
+# target to preprocess a source file
+src/command.cpp.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/raft_core.dir/build.make CMakeFiles/raft_core.dir/src/command.cpp.i
+.PHONY : src/command.cpp.i
+
+src/command.s: src/command.cpp.s
+.PHONY : src/command.s
+
+# target to generate assembly for a file
+src/command.cpp.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/raft_core.dir/build.make CMakeFiles/raft_core.dir/src/command.cpp.s
+.PHONY : src/command.cpp.s
+
 src/main.o: src/main.cpp.o
 .PHONY : src/main.o
 
@@ -340,6 +364,9 @@ help:
 	@echo "... generated/raft.pb.o"
 	@echo "... generated/raft.pb.i"
 	@echo "... generated/raft.pb.s"
+	@echo "... src/command.o"
+	@echo "... src/command.i"
+	@echo "... src/command.s"
 	@echo "... src/main.o"
 	@echo "... src/main.i"
 	@echo "... src/main.s"
