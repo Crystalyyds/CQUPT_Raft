@@ -74,6 +74,7 @@ add_library(raft_core
   src/command.cpp
   src/raft_node.cpp
   src/raft_service_impl.cpp
+  src/state_machine.cpp
 )
 
 target_include_directories(raft_core

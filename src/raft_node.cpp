@@ -2,14 +2,16 @@
 
 #include <algorithm>
 #include <chrono>
+#include <optional>
 #include <sstream>
 #include <stdexcept>
-#include <utility>
-#include <optional>
 #include <string>
+#include <utility>
 #include <vector>
+
 #include "raft/logging.h"
 #include "raft/raft_service_impl.h"
+#include "raft/state_machine.h"
 
 namespace raftdemo
 {
@@ -21,7 +23,14 @@ namespace raftdemo
   } // namespace
 
   RaftNode::RaftNode(NodeConfig config)
-      : config_(std::move(config)), rng_(std::random_device{}())
+      : RaftNode(std::move(config), std::make_unique<KvStateMachine>())
+  {
+  }
+
+  RaftNode::RaftNode(NodeConfig config, std::unique_ptr<IStateMachine> state_machine)
+      : config_(std::move(config)),
+        rng_(std::random_device{}()),
+        state_machine_(std::move(state_machine))
   {
     log_.push_back(LogRecord{0, 0, "bootstrap"});
   }
@@ -120,10 +129,21 @@ namespace raftdemo
   {
     std::lock_guard<std::mutex> lk(mu_);
     std::ostringstream oss;
-    oss << "node=" << config_.node_id << ", role=" << RoleName(role_)
-        << ", term=" << current_term_ << ", voted_for=" << voted_for_
-        << ", leader=" << leader_id_ << ", last_log_index=" << LastLogIndexLocked()
-        << ", commit_index=" << commit_index_;
+    oss << "node=" << config_.node_id
+        << ", role=" << RoleName(role_)
+        << ", term=" << current_term_
+        << ", voted_for=" << voted_for_
+        << ", leader=" << leader_id_
+        << ", last_log_index=" << LastLogIndexLocked()
+        << ", commit_index=" << commit_index_
+        << ", last_applied=" << last_applied_;
+
+    const auto *kv_sm = dynamic_cast<const KvStateMachine *>(state_machine_.get());
+    if (kv_sm != nullptr)
+    {
+      oss << ", kv=" << kv_sm->DebugString();
+    }
+
     return oss.str();
   }
 
@@ -543,10 +563,12 @@ namespace raftdemo
   void RaftNode::OnAppendEntries(const raft::AppendEntriesRequest &request,
                                  raft::AppendEntriesResponse *response)
   {
-    std::lock_guard<std::mutex> lk(mu_);
+    std::unique_lock<std::mutex> lk(mu_);
     response->set_term(current_term_);
     response->set_success(false);
     response->set_match_index(LastLogIndexLocked());
+
+    bool should_apply = false;
 
     if (request.term() < current_term_)
     {
@@ -598,12 +620,32 @@ namespace raftdemo
 
     if (request.leader_commit() > commit_index_)
     {
-      commit_index_ = std::min<std::uint64_t>(request.leader_commit(), LastLogIndexLocked());
+      const std::uint64_t new_commit =
+          std::min<std::uint64_t>(request.leader_commit(), LastLogIndexLocked());
+
+      if (new_commit > commit_index_)
+      {
+        commit_index_ = new_commit;
+        should_apply = true;
+      }
     }
 
     response->set_term(current_term_);
     response->set_success(true);
     response->set_match_index(LastLogIndexLocked());
+
+    lk.unlock();
+
+    if (should_apply)
+    {
+      ApplyResult result = ApplyCommittedEntries();
+      if (!result.Ok)
+      {
+        Log(NodeTag(config_.node_id),
+            "apply committed entries failed after append entries, reason=",
+            result.message);
+      }
+    }
   }
 
   const char *RaftNode::RoleName(Role role)
@@ -694,8 +736,26 @@ namespace raftdemo
       AdvanceCommitIndexUnlocked();
     }
 
+    ApplyResult apply_result = ApplyCommittedEntries();
+    if (!apply_result.Ok)
+    {
+      result.status = ProposeStatus::kApplyFailed;
+      result.message = apply_result.message;
+      return result;
+    }
+
+    {
+      std::lock_guard<std::mutex> lk(mu_);
+      if (last_applied_ < log_index)
+      {
+        result.status = ProposeStatus::kApplyFailed;
+        result.message = "log committed but not applied";
+        return result;
+      }
+    }
+
     result.status = ProposeStatus::kOk;
-    result.message = "command committed";
+    result.message = "command committed and applied";
     return result;
   }
 
@@ -804,7 +864,6 @@ namespace raftdemo
           return false;
 
         // 如果发现更高任期，当前 Leader 必须退回 Follower
-
         if (response->term() > current_term_)
         {
           BecomeFollowerLocked(response->term(), -1,
@@ -852,47 +911,56 @@ namespace raftdemo
     }
   }
 
-  // 先不真正执行业务状态机，但要把“已提交日志推进到已应用位置
-  void RaftNode::ApplyCommittedEntries()
+  ApplyResult RaftNode::ApplyCommittedEntries()
   {
+    std::lock_guard<std::mutex> apply_lk(apply_mu_);
+
     while (true)
     {
       std::uint64_t apply_index = 0;
       std::string command_data;
+      IStateMachine *state_machine = nullptr;
 
       {
         std::lock_guard<std::mutex> lk(mu_);
 
-        // 没有新的已提交日志需要 apply 时退出
+        // 没有新的已提交日志需要 apply
         if (last_applied_ >= commit_index_)
         {
-          return;
+          return {true, "nothing to apply"};
         }
 
-        ++last_applied_;
-        apply_index = last_applied_;
+        apply_index = last_applied_ + 1;
 
         if (apply_index >= log_.size())
         {
-          return;
+          return {false, "apply index out of range"};
         }
 
         command_data = log_[apply_index].command;
+        state_machine = state_machine_.get();
       }
 
-      // 当前阶段如果状态机尚未接入，则只推进 last_applied_
-      if (!state_machine_)
+      if (state_machine == nullptr)
       {
-        continue;
+        return {false, "state machine is null"};
       }
 
-      // 真正接入状态机后的执行入口
-      ApplyResult result = state_machine_->Apply(apply_index, command_data);
+      ApplyResult result = state_machine->Apply(apply_index, command_data);
       if (!result.Ok)
       {
         Log(NodeTag(config_.node_id),
             "state machine apply failed, index=", apply_index,
             ", reason=", result.message);
+        return result;
+      }
+
+      {
+        std::lock_guard<std::mutex> lk(mu_);
+        if (last_applied_ < apply_index)
+        {
+          last_applied_ = apply_index;
+        }
       }
     }
   }

@@ -64,11 +64,17 @@ namespace raftdemo
         }
 
         const std::vector<std::string> parts = Split(data, '|');
-        if (parts.size() < 3)
+        if (parts.empty())
+        {
             return false;
+        }
 
         if (parts[0] == "SET")
         {
+            if (parts.size() < 3)
+            {
+                return false;
+            }
             out->type = CommandType::kSet;
             out->key = parts[1];
             out->value = parts[2];
@@ -76,15 +82,17 @@ namespace raftdemo
         }
         else if (parts[0] == "DEL")
         {
+            if (parts.size() < 2)
+            {
+                return false;
+            }
             out->type = CommandType::kDelete;
             out->key = parts[1];
-            out->value = "";
+            out->value.clear();
             return out->IsValid();
         }
-        else
-        {
-            return false;
-        }
+
+        return false;
     }
 
 } // namespace raftdemo

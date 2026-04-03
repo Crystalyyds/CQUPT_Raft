@@ -43,6 +43,12 @@
 },
 {
   "directory": "/home/yangjilei/Code/C++/CQUPT_Raft/build",
+  "command": "/usr/bin/c++  -I/home/yangjilei/Code/C++/CQUPT_Raft/include -I/home/yangjilei/Code/C++/CQUPT_Raft/build/generated -isystem /home/yangjilei/Code/C++/CQUPT_Raft/build/vcpkg_installed/x64-linux/include -g -std=c++20 -o CMakeFiles/raft_core.dir/src/state_machine.cpp.o -c /home/yangjilei/Code/C++/CQUPT_Raft/src/state_machine.cpp",
+  "file": "/home/yangjilei/Code/C++/CQUPT_Raft/src/state_machine.cpp",
+  "output": "CMakeFiles/raft_core.dir/src/state_machine.cpp.o"
+},
+{
+  "directory": "/home/yangjilei/Code/C++/CQUPT_Raft/build",
   "command": "/usr/bin/c++  -I/home/yangjilei/Code/C++/CQUPT_Raft/include -I/home/yangjilei/Code/C++/CQUPT_Raft/build/generated -isystem /home/yangjilei/Code/C++/CQUPT_Raft/build/vcpkg_installed/x64-linux/include -g -std=c++20 -o CMakeFiles/raft_demo.dir/src/main.cpp.o -c /home/yangjilei/Code/C++/CQUPT_Raft/src/main.cpp",
   "file": "/home/yangjilei/Code/C++/CQUPT_Raft/src/main.cpp",
   "output": "CMakeFiles/raft_demo.dir/src/main.cpp.o"

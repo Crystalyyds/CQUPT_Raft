@@ -323,6 +323,30 @@ src/raft_service_impl.cpp.s:
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/raft_core.dir/build.make CMakeFiles/raft_core.dir/src/raft_service_impl.cpp.s
 .PHONY : src/raft_service_impl.cpp.s
 
+src/state_machine.o: src/state_machine.cpp.o
+.PHONY : src/state_machine.o
+
+# target to build an object file
+src/state_machine.cpp.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/raft_core.dir/build.make CMakeFiles/raft_core.dir/src/state_machine.cpp.o
+.PHONY : src/state_machine.cpp.o
+
+src/state_machine.i: src/state_machine.cpp.i
+.PHONY : src/state_machine.i
+
+# target to preprocess a source file
+src/state_machine.cpp.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/raft_core.dir/build.make CMakeFiles/raft_core.dir/src/state_machine.cpp.i
+.PHONY : src/state_machine.cpp.i
+
+src/state_machine.s: src/state_machine.cpp.s
+.PHONY : src/state_machine.s
+
+# target to generate assembly for a file
+src/state_machine.cpp.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/raft_core.dir/build.make CMakeFiles/raft_core.dir/src/state_machine.cpp.s
+.PHONY : src/state_machine.cpp.s
+
 src/thread_pool.o: src/thread_pool.cpp.o
 .PHONY : src/thread_pool.o
 
@@ -379,6 +403,9 @@ help:
 	@echo "... src/raft_service_impl.o"
 	@echo "... src/raft_service_impl.i"
 	@echo "... src/raft_service_impl.s"
+	@echo "... src/state_machine.o"
+	@echo "... src/state_machine.i"
+	@echo "... src/state_machine.s"
 	@echo "... src/thread_pool.o"
 	@echo "... src/thread_pool.i"
 	@echo "... src/thread_pool.s"
