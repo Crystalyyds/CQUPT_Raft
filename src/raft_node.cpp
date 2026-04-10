@@ -359,6 +359,7 @@ namespace raftdemo
         if (self->role_ != Role::kLeader || self->current_term_ != term) {
           return;
         }
+
         const auto next_index_it = self->next_index_.find(peer.node_id);
         const std::uint64_t next_index =
             next_index_it == self->next_index_.end() ? self->LastLogIndexLocked() + 1
@@ -383,26 +384,43 @@ namespace raftdemo
         return;
       }
 
-      std::lock_guard<std::mutex> lk(self->mu_);
-      if (!self->running_.load()) {
-        return;
-      }
-      if (response->term() > self->current_term_) {
-        self->BecomeFollowerLocked(response->term(), -1,
-                                   "peer replied higher term in AppendEntries");
-        return;
-      }
-      if (self->role_ != Role::kLeader || self->current_term_ != term) {
-        return;
+      bool should_apply = false;
+
+      {
+        std::lock_guard<std::mutex> lk(self->mu_);
+        if (!self->running_.load()) {
+          return;
+        }
+        if (response->term() > self->current_term_) {
+          self->BecomeFollowerLocked(response->term(), -1,
+                                     "peer replied higher term in AppendEntries");
+          return;
+        }
+        if (self->role_ != Role::kLeader || self->current_term_ != term) {
+          return;
+        }
+
+        if (response->success()) {
+          self->match_index_[peer.node_id] = response->match_index();
+          self->next_index_[peer.node_id] = response->match_index() + 1;
+
+          const std::uint64_t old_commit_index = self->commit_index_;
+          self->AdvanceCommitIndexUnlocked();
+          should_apply = self->commit_index_ > old_commit_index;
+        } else {
+          auto& next_index = self->next_index_[peer.node_id];
+          if (next_index > 1) {
+            --next_index;
+          }
+        }
       }
 
-      if (response->success()) {
-        self->match_index_[peer.node_id] = response->match_index();
-        self->next_index_[peer.node_id] = response->match_index() + 1;
-      } else {
-        auto& next_index = self->next_index_[peer.node_id];
-        if (next_index > 1) {
-          --next_index;
+      if (should_apply) {
+        ApplyResult result = self->ApplyCommittedEntries();
+        if (!result.Ok) {
+          Log(NodeTag(self->config_.node_id),
+              "apply committed entries failed after heartbeat, reason=",
+              result.message);
         }
       } });
     }
@@ -902,12 +920,51 @@ namespace raftdemo
 
   void RaftNode::AdvanceCommitIndexUnlocked()
   {
-    if (log_.empty())
-      return;
-    const std::uint64_t last_index = static_cast<std::uint64_t>(log_.size() - 1);
-    if (last_index > commit_index_)
+    if (role_ != Role::kLeader)
     {
-      commit_index_ = last_index;
+      return;
+    }
+
+    if (log_.empty())
+    {
+      return;
+    }
+
+    const std::size_t total_nodes = config_.peers.size() + 1;
+    const std::size_t majority = total_nodes / 2 + 1;
+    const std::uint64_t last_index = LastLogIndexLocked();
+
+    // 从大到小找，找到的第一个满足条件的下标，
+    // 就是当前能够推进到的最大 commit index。
+    for (std::uint64_t index = last_index; index > commit_index_; --index)
+    {
+      if (index >= log_.size())
+      {
+        continue;
+      }
+
+      // Raft 规则：Leader 只能依据当前任期的日志推进 commit_index。
+      if (log_[index].term != current_term_)
+      {
+        continue;
+      }
+
+      std::size_t replicated_count = 1; // Leader 自己算一个
+
+      for (const auto &peer : config_.peers)
+      {
+        const auto it = match_index_.find(peer.node_id);
+        if (it != match_index_.end() && it->second >= index)
+        {
+          ++replicated_count;
+        }
+      }
+
+      if (replicated_count >= majority)
+      {
+        commit_index_ = index;
+        return;
+      }
     }
   }
 
