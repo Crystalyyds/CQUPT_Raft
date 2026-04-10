@@ -97,3 +97,8 @@ target_link_libraries(raft_demo
   PRIVATE
     raft_core
 )
+
+# 单元测试的时候加上
+
+# enable_testing()
+# add_subdirectory(tests)
