@@ -6,9 +6,19 @@
 
 namespace raftdemo
 {
+    namespace
+    {
+        constexpr const char *kInternalNoOpCommand = "__raft_internal_noop__";
+    }
+
     ApplyResult KvStateMachine::Apply(std::uint64_t /*index*/,
                                       const std::string &command_data)
     {
+        if (command_data == kInternalNoOpCommand)
+        {
+            return {true, "ok"};
+        }
+
         Command cmd;
         if (!Command::Deserialize(command_data, &cmd))
         {

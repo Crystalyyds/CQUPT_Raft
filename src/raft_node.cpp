@@ -18,7 +18,14 @@ namespace raftdemo
   namespace
   {
 
+    constexpr const char *kInternalNoOpCommand = "__raft_internal_noop__";
+
     std::string NodeTag(int node_id) { return "node-" + std::to_string(node_id); }
+
+    std::string DefaultDataDir(int node_id)
+    {
+      return "./raft_data/node_" + std::to_string(node_id);
+    }
 
   } // namespace
 
@@ -32,7 +39,40 @@ namespace raftdemo
         rng_(std::random_device{}()),
         state_machine_(std::move(state_machine))
   {
-    log_.push_back(LogRecord{0, 0, "bootstrap"});
+    if (config_.data_dir.empty())
+    {
+      config_.data_dir = DefaultDataDir(config_.node_id);
+    }
+
+    storage_ = CreateFileRaftStorage(config_.data_dir);
+
+    PersistentRaftState persistent_state;
+    bool has_state = false;
+    std::string error;
+    if (!storage_->Load(&persistent_state, &has_state, &error))
+    {
+      throw std::runtime_error("failed to load raft state for node " +
+                               std::to_string(config_.node_id) + ": " + error);
+    }
+
+    if (has_state)
+    {
+      current_term_ = persistent_state.current_term;
+      voted_for_ = persistent_state.voted_for;
+      log_ = std::move(persistent_state.log);
+      if (log_.empty())
+      {
+        log_.push_back(LogRecord{0, 0, "bootstrap"});
+      }
+
+      Log(NodeTag(config_.node_id), "loaded persisted state from ", storage_->DataDir(),
+          ", term=", current_term_, ", voted_for=", voted_for_,
+          ", last_log_index=", LastLogIndexLocked());
+    }
+    else
+    {
+      log_.push_back(LogRecord{0, 0, "bootstrap"});
+    }
   }
 
   RaftNode::~RaftNode() { Stop(); }
@@ -54,7 +94,8 @@ namespace raftdemo
       ResetElectionTimerLocked();
     }
 
-    Log(NodeTag(config_.node_id), "started at ", config_.address, ", peers=", config_.peers.size());
+    Log(NodeTag(config_.node_id), "started at ", config_.address, ", peers=", config_.peers.size(),
+        ", data_dir=", config_.data_dir);
   }
 
   void RaftNode::Stop()
@@ -147,6 +188,16 @@ namespace raftdemo
     return oss.str();
   }
 
+  bool RaftNode::DebugGetValue(const std::string &key, std::string *value) const
+  {
+    const auto *kv_sm = dynamic_cast<const KvStateMachine *>(state_machine_.get());
+    if (kv_sm == nullptr)
+    {
+      return false;
+    }
+    return kv_sm->Get(key, value);
+  }
+
   void RaftNode::ResetElectionTimerLocked()
   {
     if (election_timer_id_)
@@ -231,10 +282,27 @@ namespace raftdemo
         return;
       }
 
+      const auto old_role = role_;
+      const auto old_term = current_term_;
+      const auto old_voted_for = voted_for_;
+      const auto old_leader_id = leader_id_;
+
       role_ = Role::kCandidate;
       ++current_term_;
       voted_for_ = config_.node_id;
       leader_id_ = -1;
+
+      std::string persist_error;
+      if (!PersistStateLocked(&persist_error))
+      {
+        role_ = old_role;
+        current_term_ = old_term;
+        voted_for_ = old_voted_for;
+        leader_id_ = old_leader_id;
+        ResetElectionTimerLocked();
+        Log(NodeTag(config_.node_id), "start election aborted, persist failed: ", persist_error);
+        return;
+      }
 
       term = current_term_;
       last_log_index = LastLogIndexLocked();
@@ -250,6 +318,12 @@ namespace raftdemo
     auto votes = std::make_shared<std::atomic<int>>(1);
     auto won = std::make_shared<std::atomic<bool>>(false);
     auto weak = weak_from_this();
+
+    if (quorum <= 1)
+    {
+      OnElectionWon(term);
+      return;
+    }
 
     for (const auto &peer : peers)
     {
@@ -318,6 +392,10 @@ namespace raftdemo
 
     if (should_send_heartbeat)
     {
+      if (!ProposeNoOpEntry())
+      {
+        Log(NodeTag(config_.node_id), "leader no-op append/replication did not complete");
+      }
       SendHeartbeats();
     }
   }
@@ -426,16 +504,18 @@ namespace raftdemo
     }
   }
 
-  void RaftNode::BecomeFollowerLocked(std::uint64_t new_term, int new_leader,
+  bool RaftNode::BecomeFollowerLocked(std::uint64_t new_term, int new_leader,
                                       const std::string &reason)
   {
     const auto old_role = role_;
     const auto old_term = current_term_;
+    bool hard_state_changed = false;
 
     if (new_term > current_term_)
     {
       current_term_ = new_term;
       voted_for_ = -1;
+      hard_state_changed = true;
     }
 
     role_ = Role::kFollower;
@@ -449,11 +529,24 @@ namespace raftdemo
 
     ResetElectionTimerLocked();
 
+    bool persist_ok = true;
+    if (hard_state_changed)
+    {
+      std::string persist_error;
+      persist_ok = PersistStateLocked(&persist_error);
+      if (!persist_ok)
+      {
+        Log(NodeTag(config_.node_id), "persist follower hard state failed: ", persist_error);
+      }
+    }
+
     if (old_role != role_ || old_term != current_term_)
     {
       Log(NodeTag(config_.node_id), "become follower, term=", current_term_, ", leader=",
           leader_id_, ", reason=", reason);
     }
+
+    return persist_ok;
   }
 
   void RaftNode::BecomeLeaderLocked()
@@ -470,6 +563,8 @@ namespace raftdemo
     const auto last_log_index = LastLogIndexLocked();
     next_index_.clear();
     match_index_.clear();
+    match_index_[config_.node_id] = last_log_index;
+    next_index_[config_.node_id] = last_log_index + 1;
     for (const auto &peer : config_.peers)
     {
       next_index_[peer.node_id] = last_log_index + 1;
@@ -559,7 +654,11 @@ namespace raftdemo
 
     if (request.term() > current_term_)
     {
-      BecomeFollowerLocked(request.term(), -1, "received higher term vote request");
+      if (!BecomeFollowerLocked(request.term(), -1, "received higher term vote request"))
+      {
+        response->set_term(current_term_);
+        return;
+      }
     }
 
     const bool up_to_date =
@@ -568,11 +667,23 @@ namespace raftdemo
 
     if (can_vote && up_to_date)
     {
+      const int old_voted_for = voted_for_;
       voted_for_ = request.candidate_id();
-      response->set_vote_granted(true);
-      ResetElectionTimerLocked();
-      Log(NodeTag(config_.node_id), "grant vote to candidate=", request.candidate_id(),
-          ", term=", current_term_);
+
+      std::string persist_error;
+      if (PersistStateLocked(&persist_error))
+      {
+        response->set_vote_granted(true);
+        ResetElectionTimerLocked();
+        Log(NodeTag(config_.node_id), "grant vote to candidate=", request.candidate_id(),
+            ", term=", current_term_);
+      }
+      else
+      {
+        voted_for_ = old_voted_for;
+        Log(NodeTag(config_.node_id), "reject vote because persist failed, candidate=",
+            request.candidate_id(), ", reason=", persist_error);
+      }
     }
 
     response->set_term(current_term_);
@@ -596,7 +707,11 @@ namespace raftdemo
     if (request.term() > current_term_ || role_ != Role::kFollower ||
         leader_id_ != request.leader_id())
     {
-      BecomeFollowerLocked(request.term(), request.leader_id(), "received append entries");
+      if (!BecomeFollowerLocked(request.term(), request.leader_id(), "received append entries"))
+      {
+        response->set_term(current_term_);
+        return;
+      }
     }
     else
     {
@@ -616,6 +731,7 @@ namespace raftdemo
       return;
     }
 
+    bool log_changed = false;
     std::uint64_t append_at = request.prev_log_index() + 1;
     int req_idx = 0;
     while (req_idx < request.entries_size() && append_at < log_.size())
@@ -624,6 +740,7 @@ namespace raftdemo
       if (log_[append_at].term != req_entry.term())
       {
         log_.resize(append_at);
+        log_changed = true;
         break;
       }
       ++append_at;
@@ -634,6 +751,20 @@ namespace raftdemo
     {
       const auto &req_entry = request.entries(req_idx);
       log_.push_back(LogRecord{req_entry.index(), req_entry.term(), req_entry.command()});
+      log_changed = true;
+    }
+
+    if (log_changed)
+    {
+      std::string persist_error;
+      if (!PersistStateLocked(&persist_error))
+      {
+        Log(NodeTag(config_.node_id), "append entries persist failed: ", persist_error);
+        response->set_term(current_term_);
+        response->set_success(false);
+        response->set_match_index(LastLogIndexLocked());
+        return;
+      }
     }
 
     if (request.leader_commit() > commit_index_)
@@ -732,6 +863,14 @@ namespace raftdemo
       // 先追加到本地日志，后续再复制到其他节点
       term = current_term_;
       log_index = AppendLocalLogUnlocked(command_data);
+      if (log_index == 0)
+      {
+        result.status = ProposeStatus::kReplicationFailed;
+        result.leader_id = config_.node_id;
+        result.term = current_term_;
+        result.message = "failed to append and persist local log entry";
+        return result;
+      }
 
       result.leader_id = config_.node_id;
       result.term = term;
@@ -817,6 +956,16 @@ namespace raftdemo
 
     match_index_[config_.node_id] = new_index;
     next_index_[config_.node_id] = new_index + 1;
+
+    std::string persist_error;
+    if (!PersistStateLocked(&persist_error))
+    {
+      log_.pop_back();
+      match_index_[config_.node_id] = LastLogIndexLocked();
+      next_index_[config_.node_id] = LastLogIndexLocked() + 1;
+      Log(NodeTag(config_.node_id), "append local log persist failed: ", persist_error);
+      return 0;
+    }
 
     return new_index;
   }
@@ -1020,6 +1169,61 @@ namespace raftdemo
         }
       }
     }
+  }
+
+  bool RaftNode::PersistStateLocked(std::string *reason)
+  {
+    if (!storage_)
+    {
+      if (reason != nullptr)
+      {
+        *reason = "storage is null";
+      }
+      return false;
+    }
+
+    PersistentRaftState state;
+    state.current_term = current_term_;
+    state.voted_for = voted_for_;
+    state.log = log_;
+    return storage_->Save(state, reason);
+  }
+
+  bool RaftNode::ProposeNoOpEntry()
+  {
+    std::uint64_t log_index = 0;
+
+    {
+      std::lock_guard<std::mutex> lk(mu_);
+      if (!running_.load() || role_ != Role::kLeader)
+      {
+        return false;
+      }
+      log_index = AppendLocalLogUnlocked(kInternalNoOpCommand);
+      if (log_index == 0)
+      {
+        return false;
+      }
+    }
+
+    if (!ReplicateLogEntryToMajority(log_index))
+    {
+      return false;
+    }
+
+    {
+      std::lock_guard<std::mutex> lk(mu_);
+      AdvanceCommitIndexUnlocked();
+    }
+
+    ApplyResult apply_result = ApplyCommittedEntries();
+    if (!apply_result.Ok)
+    {
+      Log(NodeTag(config_.node_id), "leader no-op apply failed, reason=", apply_result.message);
+      return false;
+    }
+
+    return true;
   }
 
 } // namespace raftdemo

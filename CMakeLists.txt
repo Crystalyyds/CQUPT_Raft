@@ -75,6 +75,7 @@ add_library(raft_core
   src/raft_node.cpp
   src/raft_service_impl.cpp
   src/state_machine.cpp
+  src/raft_storage.cpp
 )
 
 target_include_directories(raft_core
@@ -98,7 +99,5 @@ target_link_libraries(raft_demo
     raft_core
 )
 
-# 单元测试的时候加上
-
-# enable_testing()
-# add_subdirectory(tests)
+enable_testing()
+add_subdirectory(tests)

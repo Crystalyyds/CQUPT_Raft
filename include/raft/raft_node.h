@@ -18,118 +18,123 @@
 #include "raft/config.h"
 #include "raft/min_heap_timer.h"
 #include "raft/propose.h"
+#include "raft/raft_storage.h"
 #include "raft/state_machine.h"
 #include "raft/thread_pool.h"
 
 namespace raftdemo
 {
 
-class RaftServiceImpl;
+  class RaftServiceImpl;
 
-enum class Role
-{
-  kFollower,
-  kCandidate,
-  kLeader,
-};
-
-struct LogRecord
-{
-  std::uint64_t index;
-  std::uint64_t term;
-  std::string command;
-};
-
-class RaftNode : public std::enable_shared_from_this<RaftNode>
-{
-public:
-  explicit RaftNode(NodeConfig config);
-  RaftNode(NodeConfig config, std::unique_ptr<IStateMachine> state_machine);
-  ~RaftNode();
-
-  void Start();
-  void Stop();
-  void Wait();
-
-  void OnRequestVote(const raft::VoteRequest &request, raft::VoteResponse *response);
-  void OnAppendEntries(const raft::AppendEntriesRequest &request,
-                       raft::AppendEntriesResponse *response);
-
-  std::string Describe() const;
-  ProposeResult Propose(const Command &command);
-
-private:
-  struct PeerClient
+  enum class Role
   {
-    int peer_id{0};
-    std::string address;
-    std::shared_ptr<grpc::Channel> channel;
-    std::unique_ptr<raft::RaftService::Stub> stub;
-    std::mutex mu;
+    kFollower,
+    kCandidate,
+    kLeader,
   };
 
-  void InitServer();
-  void InitClients();
+  struct LogRecord
+  {
+    std::uint64_t index;
+    std::uint64_t term;
+    std::string command;
+  };
 
-  void ResetElectionTimerLocked();
-  void ResetHeartbeatTimerLocked();
-  std::chrono::milliseconds RandomElectionTimeoutLocked();
+  class RaftNode : public std::enable_shared_from_this<RaftNode>
+  {
+  public:
+    explicit RaftNode(NodeConfig config);
+    RaftNode(NodeConfig config, std::unique_ptr<IStateMachine> state_machine);
+    ~RaftNode();
 
-  void OnElectionTimeout();
-  void StartElection();
-  void OnElectionWon(std::uint64_t term);
-  void SendHeartbeats();
+    void Start();
+    void Stop();
+    void Wait();
 
-  void BecomeFollowerLocked(std::uint64_t new_term, int new_leader, const std::string &reason);
-  void BecomeLeaderLocked();
+    void OnRequestVote(const raft::VoteRequest &request, raft::VoteResponse *response);
+    void OnAppendEntries(const raft::AppendEntriesRequest &request,
+                         raft::AppendEntriesResponse *response);
 
-  bool IsCandidateLogUpToDateLocked(std::uint64_t last_log_index,
-                                    std::uint64_t last_log_term) const;
-  std::uint64_t LastLogIndexLocked() const;
-  std::uint64_t LastLogTermLocked() const;
+    std::string Describe() const;
+    ProposeResult Propose(const Command &command);
+    bool DebugGetValue(const std::string &key, std::string *value) const;
 
-  std::optional<raft::VoteResponse> RequestVoteRpc(int peer_id, const raft::VoteRequest &request);
-  std::optional<raft::AppendEntriesResponse> AppendEntriesRpc(
-      int peer_id, const raft::AppendEntriesRequest &request);
+  private:
+    struct PeerClient
+    {
+      int peer_id{0};
+      std::string address;
+      std::shared_ptr<grpc::Channel> channel;
+      std::unique_ptr<raft::RaftService::Stub> stub;
+      std::mutex mu;
+    };
 
-  static const char *RoleName(Role role);
+    void InitServer();
+    void InitClients();
 
-  bool ValidateCommandUnlocked(const Command &command, std::string *reason) const;
-  std::uint64_t AppendLocalLogUnlocked(const std::string &command_data);
-  bool ReplicateLogEntryToMajority(std::uint64_t log_index);
-  void AdvanceCommitIndexUnlocked();
-  ApplyResult ApplyCommittedEntries();
+    void ResetElectionTimerLocked();
+    void ResetHeartbeatTimerLocked();
+    std::chrono::milliseconds RandomElectionTimeoutLocked();
 
-  NodeConfig config_;
+    void OnElectionTimeout();
+    void StartElection();
+    void OnElectionWon(std::uint64_t term);
+    void SendHeartbeats();
 
-  mutable std::mutex mu_;
-  Role role_{Role::kFollower};
-  std::uint64_t current_term_{0};
-  int voted_for_{-1};
-  int leader_id_{-1};
+    bool BecomeFollowerLocked(std::uint64_t new_term, int new_leader, const std::string &reason);
+    void BecomeLeaderLocked();
 
-  std::vector<LogRecord> log_;
-  std::uint64_t commit_index_{0};
-  std::uint64_t last_applied_{0};
+    bool IsCandidateLogUpToDateLocked(std::uint64_t last_log_index,
+                                      std::uint64_t last_log_term) const;
+    std::uint64_t LastLogIndexLocked() const;
+    std::uint64_t LastLogTermLocked() const;
 
-  std::unordered_map<int, std::uint64_t> next_index_;
-  std::unordered_map<int, std::uint64_t> match_index_;
+    std::optional<raft::VoteResponse> RequestVoteRpc(int peer_id, const raft::VoteRequest &request);
+    std::optional<raft::AppendEntriesResponse> AppendEntriesRpc(
+        int peer_id, const raft::AppendEntriesRequest &request);
 
-  std::unordered_map<int, std::unique_ptr<PeerClient>> clients_;
+    static const char *RoleName(Role role);
 
-  TimerScheduler scheduler_;
-  ThreadPool rpc_pool_{4};
-  std::optional<TimerScheduler::TaskId> election_timer_id_;
-  std::optional<TimerScheduler::TaskId> heartbeat_timer_id_;
+    bool ValidateCommandUnlocked(const Command &command, std::string *reason) const;
+    std::uint64_t AppendLocalLogUnlocked(const std::string &command_data);
+    bool ReplicateLogEntryToMajority(std::uint64_t log_index);
+    void AdvanceCommitIndexUnlocked();
+    ApplyResult ApplyCommittedEntries();
+    bool PersistStateLocked(std::string *reason);
+    bool ProposeNoOpEntry();
 
-  std::mt19937 rng_;
-  std::atomic<bool> running_{false};
+    NodeConfig config_;
 
-  std::unique_ptr<RaftServiceImpl> service_;
-  std::unique_ptr<grpc::Server> server_;
+    mutable std::mutex mu_;
+    Role role_{Role::kFollower};
+    std::uint64_t current_term_{0};
+    int voted_for_{-1};
+    int leader_id_{-1};
 
-  std::mutex apply_mu_;
-  std::unique_ptr<IStateMachine> state_machine_;
-};
+    std::vector<LogRecord> log_;
+    std::uint64_t commit_index_{0};
+    std::uint64_t last_applied_{0};
+
+    std::unordered_map<int, std::uint64_t> next_index_;
+    std::unordered_map<int, std::uint64_t> match_index_;
+
+    std::unordered_map<int, std::unique_ptr<PeerClient>> clients_;
+
+    TimerScheduler scheduler_;
+    ThreadPool rpc_pool_{4};
+    std::optional<TimerScheduler::TaskId> election_timer_id_;
+    std::optional<TimerScheduler::TaskId> heartbeat_timer_id_;
+
+    std::mt19937 rng_;
+    std::atomic<bool> running_{false};
+
+    std::unique_ptr<RaftServiceImpl> service_;
+    std::unique_ptr<grpc::Server> server_;
+
+    std::mutex apply_mu_;
+    std::unique_ptr<IStateMachine> state_machine_;
+    std::unique_ptr<IRaftStorage> storage_;
+  };
 
 } // namespace raftdemo
