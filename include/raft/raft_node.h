@@ -3,12 +3,14 @@
 #include <grpcpp/grpcpp.h>
 
 #include <atomic>
+#include <condition_variable>
 #include <cstdint>
 #include <memory>
 #include <mutex>
 #include <optional>
 #include <random>
 #include <string>
+#include <thread>
 #include <unordered_map>
 #include <vector>
 
@@ -19,6 +21,7 @@
 #include "raft/min_heap_timer.h"
 #include "raft/propose.h"
 #include "raft/raft_storage.h"
+#include "raft/snapshot_storage.h"
 #include "raft/state_machine.h"
 #include "raft/thread_pool.h"
 
@@ -45,7 +48,10 @@ namespace raftdemo
   {
   public:
     explicit RaftNode(NodeConfig config);
+    RaftNode(NodeConfig config, snapshotConfig snapshot_config);
     RaftNode(NodeConfig config, std::unique_ptr<IStateMachine> state_machine);
+    RaftNode(NodeConfig config, snapshotConfig snapshot_config,
+             std::unique_ptr<IStateMachine> state_machine);
     ~RaftNode();
 
     void Start();
@@ -75,12 +81,14 @@ namespace raftdemo
 
     void ResetElectionTimerLocked();
     void ResetHeartbeatTimerLocked();
+    void ResetSnapshotTimerLocked();
     std::chrono::milliseconds RandomElectionTimeoutLocked();
 
     void OnElectionTimeout();
     void StartElection();
     void OnElectionWon(std::uint64_t term);
     void SendHeartbeats();
+    void OnSnapshotTimer();
 
     bool BecomeFollowerLocked(std::uint64_t new_term, int new_leader, const std::string &reason);
     void BecomeLeaderLocked();
@@ -89,6 +97,7 @@ namespace raftdemo
                                       std::uint64_t last_log_term) const;
     std::uint64_t LastLogIndexLocked() const;
     std::uint64_t LastLogTermLocked() const;
+    std::uint64_t TermAtIndexLocked(std::uint64_t index) const;
 
     std::optional<raft::VoteResponse> RequestVoteRpc(int peer_id, const raft::VoteRequest &request);
     std::optional<raft::AppendEntriesResponse> AppendEntriesRpc(
@@ -104,7 +113,14 @@ namespace raftdemo
     bool PersistStateLocked(std::string *reason);
     bool ProposeNoOpEntry();
 
+    void StartSnapshotWorker();
+    void StopSnapshotWorker();
+    void SnapshotWorkerLoop();
+    void MaybeScheduleSnapshotLocked(bool force_by_timer);
+    bool LoadLatestSnapshotOnStartup(std::string *reason);
+
     NodeConfig config_;
+    snapshotConfig snapshot_config_;
 
     mutable std::mutex mu_;
     Role role_{Role::kFollower};
@@ -116,6 +132,9 @@ namespace raftdemo
     std::uint64_t commit_index_{0};
     std::uint64_t last_applied_{0};
 
+    std::uint64_t last_snapshot_index_{0};
+    std::uint64_t last_snapshot_term_{0};
+
     std::unordered_map<int, std::uint64_t> next_index_;
     std::unordered_map<int, std::uint64_t> match_index_;
 
@@ -125,6 +144,7 @@ namespace raftdemo
     ThreadPool rpc_pool_{4};
     std::optional<TimerScheduler::TaskId> election_timer_id_;
     std::optional<TimerScheduler::TaskId> heartbeat_timer_id_;
+    std::optional<TimerScheduler::TaskId> snapshot_timer_id_;
 
     std::mt19937 rng_;
     std::atomic<bool> running_{false};
@@ -135,6 +155,16 @@ namespace raftdemo
     std::mutex apply_mu_;
     std::unique_ptr<IStateMachine> state_machine_;
     std::unique_ptr<IRaftStorage> storage_;
+    std::unique_ptr<ISnapshotStorage> snapshot_storage_;
+
+    std::mutex snapshot_mu_;
+    std::condition_variable snapshot_cv_;
+    std::thread snapshot_worker_;
+    bool snapshot_worker_stop_{false};
+    bool snapshot_pending_{false};
+    bool snapshot_in_progress_{false};
+    std::uint64_t pending_snapshot_index_{0};
+    std::uint64_t pending_snapshot_term_{0};
   };
 
 } // namespace raftdemo

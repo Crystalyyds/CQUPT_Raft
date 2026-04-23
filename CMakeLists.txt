@@ -89,6 +89,7 @@ add_library(raft_core
   src/raft_service_impl.cpp
   src/state_machine.cpp
   src/raft_storage.cpp
+  src/snapshot_storage.cpp
 )
 
 target_include_directories(raft_core

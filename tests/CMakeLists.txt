@@ -34,12 +34,5 @@ add_raft_gtest(test_raft_election test_raft_election.cpp)
 add_raft_gtest(test_raft_log_replication test_raft_log_replication.cpp)
 add_raft_gtest(test_raft_commit_apply test_raft_commit_apply.cpp)
 add_raft_gtest(persistence_test persistence_test.cpp)
+add_raft_gtest(snapshot_test snapshot_test.cpp)
 
-add_executable(persistence_restart_demo
-persistence_more_test.cpp
-)
-
-target_link_libraries(persistence_restart_demo
-  PRIVATE
-    raft_core
-)

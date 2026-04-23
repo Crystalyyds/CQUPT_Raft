@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <filesystem>
 #include <optional>
 #include <sstream>
 #include <stdexcept>
@@ -12,6 +13,7 @@
 #include "raft/logging.h"
 #include "raft/raft_service_impl.h"
 #include "raft/state_machine.h"
+#include "raft/snapshot_storage.h"
 
 namespace raftdemo
 {
@@ -27,15 +29,32 @@ namespace raftdemo
       return "./raft_data/node_" + std::to_string(node_id);
     }
 
+    std::string DefaultSnapshotDir(int node_id)
+    {
+      return "./raft_snapshots/node_" + std::to_string(node_id);
+    }
+
   } // namespace
 
   RaftNode::RaftNode(NodeConfig config)
-      : RaftNode(std::move(config), std::make_unique<KvStateMachine>())
+      : RaftNode(std::move(config), snapshotConfig{}, std::make_unique<KvStateMachine>())
+  {
+  }
+
+  RaftNode::RaftNode(NodeConfig config, snapshotConfig snapshot_config)
+      : RaftNode(std::move(config), std::move(snapshot_config), std::make_unique<KvStateMachine>())
   {
   }
 
   RaftNode::RaftNode(NodeConfig config, std::unique_ptr<IStateMachine> state_machine)
+      : RaftNode(std::move(config), snapshotConfig{}, std::move(state_machine))
+  {
+  }
+
+  RaftNode::RaftNode(NodeConfig config, snapshotConfig snapshot_config,
+                     std::unique_ptr<IStateMachine> state_machine)
       : config_(std::move(config)),
+        snapshot_config_(std::move(snapshot_config)),
         rng_(std::random_device{}()),
         state_machine_(std::move(state_machine))
   {
@@ -44,7 +63,14 @@ namespace raftdemo
       config_.data_dir = DefaultDataDir(config_.node_id);
     }
 
+    if (snapshot_config_.snapshot_dir.empty())
+    {
+      snapshot_config_.snapshot_dir = DefaultSnapshotDir(config_.node_id);
+    }
+
     storage_ = CreateFileRaftStorage(config_.data_dir);
+    snapshot_storage_ = CreateFileSnapshotStorage(snapshot_config_.snapshot_dir,
+                                                  snapshot_config_.file_prefix);
 
     PersistentRaftState persistent_state;
     bool has_state = false;
@@ -73,6 +99,16 @@ namespace raftdemo
     {
       log_.push_back(LogRecord{0, 0, "bootstrap"});
     }
+
+    if (snapshot_config_.enabled && snapshot_config_.load_on_startup)
+    {
+      std::string snapshot_error;
+      if (!LoadLatestSnapshotOnStartup(&snapshot_error) && !snapshot_error.empty())
+      {
+        throw std::runtime_error("failed to load snapshot for node " +
+                                 std::to_string(config_.node_id) + ": " + snapshot_error);
+      }
+    }
   }
 
   RaftNode::~RaftNode() { Stop(); }
@@ -87,15 +123,17 @@ namespace raftdemo
 
     InitClients();
     scheduler_.Start();
+    StartSnapshotWorker();
     InitServer();
 
     {
       std::lock_guard<std::mutex> lk(mu_);
       ResetElectionTimerLocked();
+      ResetSnapshotTimerLocked();
     }
 
     Log(NodeTag(config_.node_id), "started at ", config_.address, ", peers=", config_.peers.size(),
-        ", data_dir=", config_.data_dir);
+        ", data_dir=", config_.data_dir, ", snapshot_dir=", snapshot_config_.snapshot_dir);
   }
 
   void RaftNode::Stop()
@@ -118,7 +156,14 @@ namespace raftdemo
         scheduler_.Cancel(*heartbeat_timer_id_);
         heartbeat_timer_id_.reset();
       }
+      if (snapshot_timer_id_)
+      {
+        scheduler_.Cancel(*snapshot_timer_id_);
+        snapshot_timer_id_.reset();
+      }
     }
+
+    StopSnapshotWorker();
 
     if (server_)
     {
@@ -177,7 +222,8 @@ namespace raftdemo
         << ", leader=" << leader_id_
         << ", last_log_index=" << LastLogIndexLocked()
         << ", commit_index=" << commit_index_
-        << ", last_applied=" << last_applied_;
+        << ", last_applied=" << last_applied_
+        << ", last_snapshot_index=" << last_snapshot_index_;
 
     const auto *kv_sm = dynamic_cast<const KvStateMachine *>(state_machine_.get());
     if (kv_sm != nullptr)
@@ -241,6 +287,28 @@ namespace raftdemo
     } });
   }
 
+  void RaftNode::ResetSnapshotTimerLocked()
+  {
+    if (snapshot_timer_id_)
+    {
+      scheduler_.Cancel(*snapshot_timer_id_);
+      snapshot_timer_id_.reset();
+    }
+
+    if (!snapshot_config_.enabled || snapshot_config_.snapshot_interval.count() <= 0)
+    {
+      return;
+    }
+
+    auto weak = weak_from_this();
+    snapshot_timer_id_ = scheduler_.ScheduleAfter(snapshot_config_.snapshot_interval, [weak]
+                                                  {
+      if (auto self = weak.lock())
+      {
+        self->OnSnapshotTimer();
+      } });
+  }
+
   std::chrono::milliseconds RaftNode::RandomElectionTimeoutLocked()
   {
     const auto min_ms = static_cast<int>(config_.election_timeout_min.count());
@@ -265,6 +333,27 @@ namespace raftdemo
     }
 
     StartElection();
+  }
+
+  void RaftNode::OnSnapshotTimer()
+  {
+    if (!running_.load())
+    {
+      return;
+    }
+
+    {
+      std::lock_guard<std::mutex> lk(mu_);
+      if (!running_.load())
+      {
+        return;
+      }
+      MaybeScheduleSnapshotLocked(true);
+      if (running_.load())
+      {
+        ResetSnapshotTimerLocked();
+      }
+    }
   }
 
   void RaftNode::StartElection()
@@ -1167,6 +1256,199 @@ namespace raftdemo
         {
           last_applied_ = apply_index;
         }
+        MaybeScheduleSnapshotLocked(false);
+      }
+    }
+  }
+
+  std::uint64_t RaftNode::TermAtIndexLocked(std::uint64_t index) const
+  {
+    if (index < log_.size())
+    {
+      return log_[index].term;
+    }
+    if (index == last_snapshot_index_)
+    {
+      return last_snapshot_term_;
+    }
+    return 0;
+  }
+
+  void RaftNode::StartSnapshotWorker()
+  {
+    std::lock_guard<std::mutex> lk(snapshot_mu_);
+    snapshot_worker_stop_ = false;
+    if (snapshot_worker_.joinable())
+    {
+      return;
+    }
+    snapshot_worker_ = std::thread(&RaftNode::SnapshotWorkerLoop, this);
+  }
+
+  void RaftNode::StopSnapshotWorker()
+  {
+    {
+      std::lock_guard<std::mutex> lk(snapshot_mu_);
+      snapshot_worker_stop_ = true;
+      snapshot_pending_ = false;
+    }
+    snapshot_cv_.notify_all();
+    if (snapshot_worker_.joinable())
+    {
+      snapshot_worker_.join();
+    }
+  }
+
+  void RaftNode::MaybeScheduleSnapshotLocked(bool force_by_timer)
+  {
+    if (!snapshot_config_.enabled || snapshot_storage_ == nullptr || state_machine_ == nullptr)
+    {
+      return;
+    }
+    if (last_applied_ <= last_snapshot_index_)
+    {
+      return;
+    }
+    if (!force_by_timer)
+    {
+      const std::uint64_t delta = last_applied_ - last_snapshot_index_;
+      if (delta < snapshot_config_.log_threshold)
+      {
+        return;
+      }
+    }
+
+    std::lock_guard<std::mutex> lk(snapshot_mu_);
+    if (snapshot_pending_ || snapshot_in_progress_)
+    {
+      return;
+    }
+
+    pending_snapshot_index_ = last_applied_;
+    pending_snapshot_term_ = TermAtIndexLocked(last_applied_);
+    snapshot_pending_ = true;
+    snapshot_cv_.notify_one();
+  }
+
+  bool RaftNode::LoadLatestSnapshotOnStartup(std::string *reason)
+  {
+    if (!snapshot_storage_ || !snapshot_config_.enabled || !snapshot_config_.load_on_startup)
+    {
+      return true;
+    }
+
+    std::vector<SnapshotMeta> snapshots;
+    std::string list_error;
+    if (!snapshot_storage_->ListSnapshots(&snapshots, &list_error))
+    {
+      if (reason != nullptr)
+      {
+        *reason = list_error;
+      }
+      return false;
+    }
+
+    for (const auto &meta : snapshots)
+    {
+      SnapshotResult load_result = state_machine_->LoadSnapshot(meta.snapshot_path);
+      if (!load_result.Ok())
+      {
+        Log(NodeTag(config_.node_id), "skip invalid snapshot ", meta.snapshot_path,
+            ", reason=", load_result.message);
+        continue;
+      }
+
+      if (meta.last_included_index > LastLogIndexLocked())
+      {
+        Log(NodeTag(config_.node_id), "skip snapshot beyond raft log, snapshot_index=",
+            meta.last_included_index, ", last_log_index=", LastLogIndexLocked());
+        continue;
+      }
+
+      last_snapshot_index_ = meta.last_included_index;
+      last_snapshot_term_ = meta.last_included_term;
+      last_applied_ = meta.last_included_index;
+      commit_index_ = meta.last_included_index;
+
+      Log(NodeTag(config_.node_id), "loaded snapshot from ", meta.snapshot_path,
+          ", index=", meta.last_included_index, ", term=", meta.last_included_term);
+      return true;
+    }
+
+    return true;
+  }
+
+  void RaftNode::SnapshotWorkerLoop()
+  {
+    while (true)
+    {
+      std::uint64_t snapshot_index = 0;
+      std::uint64_t snapshot_term = 0;
+
+      {
+        std::unique_lock<std::mutex> lk(snapshot_mu_);
+        snapshot_cv_.wait(lk, [this]
+                          { return snapshot_worker_stop_ || snapshot_pending_; });
+        if (snapshot_worker_stop_)
+        {
+          return;
+        }
+
+        snapshot_index = pending_snapshot_index_;
+        snapshot_term = pending_snapshot_term_;
+        snapshot_pending_ = false;
+        snapshot_in_progress_ = true;
+      }
+
+      std::string snapshot_dir = snapshot_config_.snapshot_dir;
+      const std::filesystem::path temp_path = std::filesystem::path(snapshot_dir) /
+                                              ("snapshot_work_node_" + std::to_string(config_.node_id) + ".bin");
+
+      SnapshotResult save_result = state_machine_->SaveSnapshot(temp_path.string());
+      if (!save_result.Ok())
+      {
+        Log(NodeTag(config_.node_id), "save state machine snapshot failed: ", save_result.message);
+      }
+      else
+      {
+        SnapshotMeta meta;
+        std::string error;
+        if (snapshot_storage_->SaveSnapshotFile(temp_path.string(), snapshot_index, snapshot_term,
+                                                &meta, &error))
+        {
+          {
+            std::lock_guard<std::mutex> lk(mu_);
+            if (snapshot_index > last_snapshot_index_)
+            {
+              last_snapshot_index_ = snapshot_index;
+              last_snapshot_term_ = snapshot_term;
+            }
+          }
+
+          std::string prune_error;
+          if (!snapshot_storage_->PruneSnapshots(snapshot_config_.max_snapshot_count, &prune_error) &&
+              !prune_error.empty())
+          {
+            Log(NodeTag(config_.node_id), "prune snapshots failed: ", prune_error);
+          }
+
+          Log(NodeTag(config_.node_id), "snapshot saved: ", meta.snapshot_path,
+              ", index=", snapshot_index, ", term=", snapshot_term);
+        }
+        else
+        {
+          Log(NodeTag(config_.node_id), "persist snapshot file failed: ", error);
+        }
+      }
+
+      {
+        std::lock_guard<std::mutex> lk(snapshot_mu_);
+        snapshot_in_progress_ = false;
+      }
+
+      {
+        std::lock_guard<std::mutex> lk(mu_);
+        MaybeScheduleSnapshotLocked(false);
       }
     }
   }
