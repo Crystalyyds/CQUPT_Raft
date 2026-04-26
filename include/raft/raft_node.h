@@ -29,6 +29,7 @@ namespace raftdemo
 {
 
   class RaftServiceImpl;
+  class Replicator;
 
   enum class Role
   {
@@ -78,8 +79,11 @@ namespace raftdemo
       std::mutex mu;
     };
 
+    friend class Replicator;
+
     void InitServer();
     void InitClients();
+    Replicator *GetOrCreateReplicatorLocked(const PeerConfig &peer);
 
     void ResetElectionTimerLocked();
     void ResetHeartbeatTimerLocked();
@@ -148,6 +152,7 @@ namespace raftdemo
 
     std::unordered_map<int, std::uint64_t> next_index_;
     std::unordered_map<int, std::uint64_t> match_index_;
+    std::unordered_map<int, std::unique_ptr<Replicator>> replicators_;
 
     std::unordered_map<int, std::unique_ptr<PeerClient>> clients_;
 

@@ -90,6 +90,7 @@ add_library(raft_core
   src/state_machine.cpp
   src/raft_storage.cpp
   src/snapshot_storage.cpp
+  src/replicator.cpp
 )
 
 target_include_directories(raft_core
