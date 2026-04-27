@@ -22,6 +22,36 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 # 注意：这个对 Makefile / Ninja 生效，Visual Studio 生成器会忽略
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
+# =========================
+# Build parallelism control
+# =========================
+# Ninja 默认会使用较高并发，gRPC / protobuf / absl 编译时容易占满 CPU 和内存。
+# 这里通过 CMake job pool 限制 Ninja 的编译、链接和 proto 生成并发。
+#
+# 可在重新配置时覆盖：
+#   cmake -S . -B build -DRAFT_BUILD_JOBS=2 -DRAFT_LINK_JOBS=1 -DRAFT_PROTO_JOBS=1
+#
+# 更稳但更慢：
+#   -DRAFT_BUILD_JOBS=1 -DRAFT_LINK_JOBS=1 -DRAFT_PROTO_JOBS=1
+set(RAFT_BUILD_JOBS 2 CACHE STRING "Max concurrent compile jobs for Ninja")
+set(RAFT_LINK_JOBS 1 CACHE STRING "Max concurrent link jobs for Ninja")
+set(RAFT_PROTO_JOBS 1 CACHE STRING "Max concurrent protobuf/gRPC codegen jobs for Ninja")
+
+if(CMAKE_GENERATOR MATCHES "Ninja")
+  set_property(GLOBAL PROPERTY JOB_POOLS
+    raft_compile_pool=${RAFT_BUILD_JOBS}
+    raft_link_pool=${RAFT_LINK_JOBS}
+    raft_proto_pool=${RAFT_PROTO_JOBS}
+  )
+
+  set(CMAKE_JOB_POOL_COMPILE raft_compile_pool)
+  set(CMAKE_JOB_POOL_LINK raft_link_pool)
+
+  set(RAFT_PROTO_JOB_POOL_ARGS JOB_POOL raft_proto_pool)
+else()
+  set(RAFT_PROTO_JOB_POOL_ARGS)
+endif()
+
 find_package(Protobuf CONFIG REQUIRED)
 find_package(gRPC CONFIG REQUIRED)
 find_package(Threads REQUIRED)
@@ -62,6 +92,7 @@ add_custom_command(
     --plugin=protoc-gen-grpc=${_GRPC_CPP_PLUGIN_EXECUTABLE}
     ${PROTO_FILE}
   DEPENDS ${PROTO_FILE}
+  ${RAFT_PROTO_JOB_POOL_ARGS}
   VERBATIM
 )
 

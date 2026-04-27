@@ -2,10 +2,14 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cstdlib>
+#include <cstdint>
 #include <filesystem>
 #include <memory>
+#include <random>
 #include <string>
 #include <thread>
+#include <utility>
 #include <vector>
 
 #include "raft/command.h"
@@ -13,254 +17,343 @@
 #include "raft/propose.h"
 #include "raft/raft_node.h"
 
-namespace raftdemo {
-namespace {
+namespace raftdemo
+{
+  namespace
+  {
 
-using namespace std::chrono_literals;
-namespace fs = std::filesystem;
+    using namespace std::chrono_literals;
+    namespace fs = std::filesystem;
 
-struct RunningCluster {
-  std::vector<std::shared_ptr<RaftNode>> nodes;
-  std::vector<std::thread> threads;
-};
-
-class ScopedDataDir {
- public:
-  explicit ScopedDataDir(std::string name) {
-    std::error_code ec;
-    root_ = fs::temp_directory_path(ec);
-    if (ec || root_.empty()) {
-      root_ = fs::current_path();
+    fs::path TestBinaryDir()
+    {
+#ifdef RAFT_TEST_BINARY_DIR
+      return fs::path(RAFT_TEST_BINARY_DIR);
+#else
+      return fs::current_path();
+#endif
     }
-    root_ /= "raftdemo_tests";
-    root_ /= std::move(name);
-    fs::remove_all(root_, ec);
-    ec.clear();
-    fs::create_directories(root_, ec);
-  }
 
-  ~ScopedDataDir() {
-    std::error_code ec;
-    fs::remove_all(root_, ec);
-  }
+    std::uint64_t NowForPath()
+    {
+      return static_cast<std::uint64_t>(
+          std::chrono::duration_cast<std::chrono::milliseconds>(
+              std::chrono::system_clock::now().time_since_epoch())
+              .count());
+    }
 
-  const fs::path& path() const { return root_; }
+    bool KeepTestData()
+    {
+      const char *value = std::getenv("RAFT_TEST_KEEP_DATA");
+      return value != nullptr && std::string(value) == "1";
+    }
 
- private:
-  fs::path root_;
-};
+    struct RunningCluster
+    {
+      RunningCluster() = default;
+      RunningCluster(const RunningCluster &) = delete;
+      RunningCluster &operator=(const RunningCluster &) = delete;
 
-bool IsLeaderNode(const std::shared_ptr<RaftNode>& node) {
-  return node != nullptr && node->Describe().find("role=Leader") != std::string::npos;
-}
+      RunningCluster(RunningCluster &&other) noexcept
+          : nodes(std::move(other.nodes)), threads(std::move(other.threads)) {}
 
-std::shared_ptr<RaftNode> WaitForLeader(
-    const std::vector<std::shared_ptr<RaftNode>>& nodes,
-    std::chrono::milliseconds timeout) {
-  const auto deadline = std::chrono::steady_clock::now() + timeout;
-  while (std::chrono::steady_clock::now() < deadline) {
-    for (const auto& node : nodes) {
-      if (IsLeaderNode(node)) {
-        return node;
+      RunningCluster &operator=(RunningCluster &&other) noexcept
+      {
+        if (this != &other)
+        {
+          Stop();
+          nodes = std::move(other.nodes);
+          threads = std::move(other.threads);
+        }
+        return *this;
       }
+
+      ~RunningCluster() { Stop(); }
+
+      void Stop()
+      {
+        for (auto &node : nodes)
+        {
+          if (node)
+          {
+            node->Stop();
+          }
+        }
+        for (auto &t : threads)
+        {
+          if (t.joinable())
+          {
+            t.join();
+          }
+        }
+        threads.clear();
+      }
+
+      std::vector<std::shared_ptr<RaftNode>> nodes;
+      std::vector<std::thread> threads;
+    };
+
+    class ScopedDataDir
+    {
+    public:
+      explicit ScopedDataDir(std::string name)
+      {
+        std::random_device rd;
+        std::error_code ec;
+        root_ = TestBinaryDir() / "raft_test_data" / "persistence" /
+                (std::move(name) + "_" + std::to_string(NowForPath()) + "_" +
+                 std::to_string(rd()));
+        fs::remove_all(root_, ec);
+        ec.clear();
+        fs::create_directories(root_, ec);
+      }
+
+      ~ScopedDataDir()
+      {
+        if (KeepTestData())
+        {
+          return;
+        }
+        std::error_code ec;
+        fs::remove_all(root_, ec);
+      }
+
+      const fs::path &path() const { return root_; }
+
+    private:
+      fs::path root_;
+    };
+
+    bool IsLeaderNode(const std::shared_ptr<RaftNode> &node)
+    {
+      return node != nullptr && node->Describe().find("role=Leader") != std::string::npos;
     }
-    std::this_thread::sleep_for(100ms);
-  }
-  return nullptr;
-}
 
-std::vector<NodeConfig> BuildThreeNodeConfigs(const fs::path& data_root, int base_port) {
-  NodeConfig n1;
-  n1.node_id = 1;
-  n1.address = "127.0.0.1:" + std::to_string(base_port + 1);
-  n1.peers = {
-      PeerConfig{2, "127.0.0.1:" + std::to_string(base_port + 2)},
-      PeerConfig{3, "127.0.0.1:" + std::to_string(base_port + 3)},
-  };
-  n1.election_timeout_min = std::chrono::milliseconds(300);
-  n1.election_timeout_max = std::chrono::milliseconds(600);
-  n1.heartbeat_interval = std::chrono::milliseconds(100);
-  n1.rpc_deadline = std::chrono::milliseconds(500);
-  n1.data_dir = (data_root / "node_1").string();
+    std::shared_ptr<RaftNode> WaitForLeader(
+        const std::vector<std::shared_ptr<RaftNode>> &nodes,
+        std::chrono::milliseconds timeout)
+    {
+      const auto deadline = std::chrono::steady_clock::now() + timeout;
+      while (std::chrono::steady_clock::now() < deadline)
+      {
+        for (const auto &node : nodes)
+        {
+          if (IsLeaderNode(node))
+          {
+            return node;
+          }
+        }
+        std::this_thread::sleep_for(100ms);
+      }
+      return nullptr;
+    }
 
-  NodeConfig n2;
-  n2.node_id = 2;
-  n2.address = "127.0.0.1:" + std::to_string(base_port + 2);
-  n2.peers = {
-      PeerConfig{1, "127.0.0.1:" + std::to_string(base_port + 1)},
-      PeerConfig{3, "127.0.0.1:" + std::to_string(base_port + 3)},
-  };
-  n2.election_timeout_min = std::chrono::milliseconds(300);
-  n2.election_timeout_max = std::chrono::milliseconds(600);
-  n2.heartbeat_interval = std::chrono::milliseconds(100);
-  n2.rpc_deadline = std::chrono::milliseconds(500);
-  n2.data_dir = (data_root / "node_2").string();
+    std::vector<NodeConfig> BuildThreeNodeConfigs(const fs::path &data_root, int base_port)
+    {
+      NodeConfig n1;
+      n1.node_id = 1;
+      n1.address = "127.0.0.1:" + std::to_string(base_port + 1);
+      n1.peers = {
+          PeerConfig{2, "127.0.0.1:" + std::to_string(base_port + 2)},
+          PeerConfig{3, "127.0.0.1:" + std::to_string(base_port + 3)},
+      };
+      n1.election_timeout_min = std::chrono::milliseconds(300);
+      n1.election_timeout_max = std::chrono::milliseconds(600);
+      n1.heartbeat_interval = std::chrono::milliseconds(100);
+      n1.rpc_deadline = std::chrono::milliseconds(500);
+      n1.data_dir = (data_root / "node_1").string();
 
-  NodeConfig n3;
-  n3.node_id = 3;
-  n3.address = "127.0.0.1:" + std::to_string(base_port + 3);
-  n3.peers = {
-      PeerConfig{1, "127.0.0.1:" + std::to_string(base_port + 1)},
-      PeerConfig{2, "127.0.0.1:" + std::to_string(base_port + 2)},
-  };
-  n3.election_timeout_min = std::chrono::milliseconds(300);
-  n3.election_timeout_max = std::chrono::milliseconds(600);
-  n3.heartbeat_interval = std::chrono::milliseconds(100);
-  n3.rpc_deadline = std::chrono::milliseconds(500);
-  n3.data_dir = (data_root / "node_3").string();
+      NodeConfig n2;
+      n2.node_id = 2;
+      n2.address = "127.0.0.1:" + std::to_string(base_port + 2);
+      n2.peers = {
+          PeerConfig{1, "127.0.0.1:" + std::to_string(base_port + 1)},
+          PeerConfig{3, "127.0.0.1:" + std::to_string(base_port + 3)},
+      };
+      n2.election_timeout_min = std::chrono::milliseconds(300);
+      n2.election_timeout_max = std::chrono::milliseconds(600);
+      n2.heartbeat_interval = std::chrono::milliseconds(100);
+      n2.rpc_deadline = std::chrono::milliseconds(500);
+      n2.data_dir = (data_root / "node_2").string();
 
-  return {n1, n2, n3};
-}
+      NodeConfig n3;
+      n3.node_id = 3;
+      n3.address = "127.0.0.1:" + std::to_string(base_port + 3);
+      n3.peers = {
+          PeerConfig{1, "127.0.0.1:" + std::to_string(base_port + 1)},
+          PeerConfig{2, "127.0.0.1:" + std::to_string(base_port + 2)},
+      };
+      n3.election_timeout_min = std::chrono::milliseconds(300);
+      n3.election_timeout_max = std::chrono::milliseconds(600);
+      n3.heartbeat_interval = std::chrono::milliseconds(100);
+      n3.rpc_deadline = std::chrono::milliseconds(500);
+      n3.data_dir = (data_root / "node_3").string();
 
-RunningCluster StartCluster(const std::vector<NodeConfig>& configs) {
-  RunningCluster cluster;
-  cluster.nodes.reserve(configs.size());
-  for (const auto& cfg : configs) {
-    cluster.nodes.push_back(std::make_shared<RaftNode>(cfg));
-  }
+      return {n1, n2, n3};
+    }
 
-  cluster.threads.reserve(cluster.nodes.size());
-  for (const auto& node : cluster.nodes) {
-    cluster.threads.emplace_back([node]() {
+    RunningCluster StartCluster(const std::vector<NodeConfig> &configs)
+    {
+      RunningCluster cluster;
+      snapshotConfig snapshot_config;
+      snapshot_config.enabled = false;
+      cluster.nodes.reserve(configs.size());
+      for (const auto &cfg : configs)
+      {
+        cluster.nodes.push_back(std::make_shared<RaftNode>(cfg, snapshot_config));
+      }
+
+      cluster.threads.reserve(cluster.nodes.size());
+      for (const auto &node : cluster.nodes)
+      {
+        cluster.threads.emplace_back([node]()
+                                     {
       node->Start();
-      node->Wait();
-    });
-  }
-  return cluster;
-}
-
-void StopCluster(RunningCluster* cluster) {
-  if (cluster == nullptr) {
-    return;
-  }
-  for (auto& node : cluster->nodes) {
-    if (node) {
-      node->Stop();
+      node->Wait(); });
+      }
+      return cluster;
     }
-  }
-  for (auto& t : cluster->threads) {
-    if (t.joinable()) {
-      t.join();
-    }
-  }
-}
 
-bool ProposeSet(const std::shared_ptr<RaftNode>& leader, const std::string& key,
-                const std::string& value) {
-  if (leader == nullptr) {
-    return false;
-  }
-  Command cmd;
-  cmd.type = CommandType::kSet;
-  cmd.key = key;
-  cmd.value = value;
-  const ProposeResult result = leader->Propose(cmd);
-  return result.Ok();
-}
-
-bool WaitUntilValue(const std::vector<std::shared_ptr<RaftNode>>& nodes,
-                    const std::string& key,
-                    const std::string& expected_value,
-                    std::chrono::milliseconds timeout) {
-  const auto deadline = std::chrono::steady_clock::now() + timeout;
-  while (std::chrono::steady_clock::now() < deadline) {
-    bool all_ok = true;
-    for (const auto& node : nodes) {
-      std::string actual;
-      if (!node->DebugGetValue(key, &actual) || actual != expected_value) {
-        all_ok = false;
-        break;
+    void StopCluster(RunningCluster *cluster)
+    {
+      if (cluster != nullptr)
+      {
+        cluster->Stop();
       }
     }
-    if (all_ok) {
-      return true;
+
+    bool ProposeSet(const std::shared_ptr<RaftNode> &leader, const std::string &key,
+                    const std::string &value)
+    {
+      if (leader == nullptr)
+      {
+        return false;
+      }
+      Command cmd;
+      cmd.type = CommandType::kSet;
+      cmd.key = key;
+      cmd.value = value;
+      const ProposeResult result = leader->Propose(cmd);
+      return result.Ok();
     }
-    std::this_thread::sleep_for(100ms);
-  }
-  return false;
-}
 
-TEST(PersistenceTest, FullClusterRestartRecovery) {
-  ScopedDataDir scoped_dir("test_full_restart");
-  auto configs = BuildThreeNodeConfigs(scoped_dir.path(), 53050);
-
-  auto cluster = StartCluster(configs);
-  auto leader = WaitForLeader(cluster.nodes, 6s);
-  ASSERT_NE(leader, nullptr);
-
-  ASSERT_TRUE(ProposeSet(leader, "alpha", "1"));
-  ASSERT_TRUE(ProposeSet(leader, "beta", "2"));
-  ASSERT_TRUE(WaitUntilValue(cluster.nodes, "alpha", "1", 5s));
-  ASSERT_TRUE(WaitUntilValue(cluster.nodes, "beta", "2", 5s));
-
-  StopCluster(&cluster);
-  std::this_thread::sleep_for(1s);
-
-  cluster = StartCluster(configs);
-  leader = WaitForLeader(cluster.nodes, 6s);
-  ASSERT_NE(leader, nullptr);
-
-  EXPECT_TRUE(WaitUntilValue(cluster.nodes, "alpha", "1", 8s));
-  EXPECT_TRUE(WaitUntilValue(cluster.nodes, "beta", "2", 8s));
-
-  StopCluster(&cluster);
-}
-
-TEST(PersistenceTest, RestartedFollowerCatchesUp) {
-  ScopedDataDir scoped_dir("test_follower_restart");
-  auto configs = BuildThreeNodeConfigs(scoped_dir.path(), 53150);
-
-  auto cluster = StartCluster(configs);
-  auto leader = WaitForLeader(cluster.nodes, 6s);
-  ASSERT_NE(leader, nullptr);
-
-  std::shared_ptr<RaftNode> follower;
-  for (const auto& node : cluster.nodes) {
-    if (node != leader) {
-      follower = node;
-      break;
+    bool WaitUntilValue(const std::vector<std::shared_ptr<RaftNode>> &nodes,
+                        const std::string &key,
+                        const std::string &expected_value,
+                        std::chrono::milliseconds timeout)
+    {
+      const auto deadline = std::chrono::steady_clock::now() + timeout;
+      while (std::chrono::steady_clock::now() < deadline)
+      {
+        bool all_ok = true;
+        for (const auto &node : nodes)
+        {
+          std::string actual;
+          if (!node->DebugGetValue(key, &actual) || actual != expected_value)
+          {
+            all_ok = false;
+            break;
+          }
+        }
+        if (all_ok)
+        {
+          return true;
+        }
+        std::this_thread::sleep_for(100ms);
+      }
+      return false;
     }
-  }
-  ASSERT_NE(follower, nullptr);
 
-  ASSERT_TRUE(ProposeSet(leader, "first", "100"));
-  ASSERT_TRUE(WaitUntilValue(cluster.nodes, "first", "100", 5s));
+    TEST(PersistenceTest, FullClusterRestartRecovery)
+    {
+      ScopedDataDir scoped_dir("test_full_restart");
+      auto configs = BuildThreeNodeConfigs(scoped_dir.path(), 53050);
 
-  follower->Stop();
-  std::this_thread::sleep_for(1s);
+      auto cluster = StartCluster(configs);
+      auto leader = WaitForLeader(cluster.nodes, 6s);
+      ASSERT_NE(leader, nullptr);
 
-  ASSERT_TRUE(ProposeSet(leader, "second", "200"));
+      ASSERT_TRUE(ProposeSet(leader, "alpha", "1"));
+      ASSERT_TRUE(ProposeSet(leader, "beta", "2"));
+      ASSERT_TRUE(WaitUntilValue(cluster.nodes, "alpha", "1", 5s));
+      ASSERT_TRUE(WaitUntilValue(cluster.nodes, "beta", "2", 5s));
 
-  std::vector<std::shared_ptr<RaftNode>> alive_nodes;
-  for (const auto& node : cluster.nodes) {
-    if (node != follower) {
-      alive_nodes.push_back(node);
+      StopCluster(&cluster);
+      std::this_thread::sleep_for(1s);
+
+      cluster = StartCluster(configs);
+      leader = WaitForLeader(cluster.nodes, 6s);
+      ASSERT_NE(leader, nullptr);
+
+      EXPECT_TRUE(WaitUntilValue(cluster.nodes, "alpha", "1", 8s));
+      EXPECT_TRUE(WaitUntilValue(cluster.nodes, "beta", "2", 8s));
+
+      StopCluster(&cluster);
     }
-  }
-  ASSERT_TRUE(WaitUntilValue(alive_nodes, "second", "200", 5s));
 
-  const auto follower_it = std::find(cluster.nodes.begin(), cluster.nodes.end(), follower);
-  ASSERT_NE(follower_it, cluster.nodes.end());
+    TEST(PersistenceTest, RestartedFollowerCatchesUp)
+    {
+      ScopedDataDir scoped_dir("test_follower_restart");
+      auto configs = BuildThreeNodeConfigs(scoped_dir.path(), 53150);
 
-  const std::size_t follower_index =
-      static_cast<std::size_t>(std::distance(cluster.nodes.begin(), follower_it));
+      auto cluster = StartCluster(configs);
+      auto leader = WaitForLeader(cluster.nodes, 6s);
+      ASSERT_NE(leader, nullptr);
 
-  if (cluster.threads[follower_index].joinable()) {
-    cluster.threads[follower_index].join();
-  }
+      std::shared_ptr<RaftNode> follower;
+      for (const auto &node : cluster.nodes)
+      {
+        if (node != leader)
+        {
+          follower = node;
+          break;
+        }
+      }
+      ASSERT_NE(follower, nullptr);
 
-  auto restarted_follower = std::make_shared<RaftNode>(configs[follower_index]);
-  cluster.nodes[follower_index] = restarted_follower;
-  cluster.threads[follower_index] = std::thread([restarted_follower]() {
+      ASSERT_TRUE(ProposeSet(leader, "first", "100"));
+      ASSERT_TRUE(WaitUntilValue(cluster.nodes, "first", "100", 5s));
+
+      follower->Stop();
+      std::this_thread::sleep_for(1s);
+
+      ASSERT_TRUE(ProposeSet(leader, "second", "200"));
+
+      std::vector<std::shared_ptr<RaftNode>> alive_nodes;
+      for (const auto &node : cluster.nodes)
+      {
+        if (node != follower)
+        {
+          alive_nodes.push_back(node);
+        }
+      }
+      ASSERT_TRUE(WaitUntilValue(alive_nodes, "second", "200", 5s));
+
+      const auto follower_it = std::find(cluster.nodes.begin(), cluster.nodes.end(), follower);
+      ASSERT_NE(follower_it, cluster.nodes.end());
+
+      const std::size_t follower_index =
+          static_cast<std::size_t>(std::distance(cluster.nodes.begin(), follower_it));
+
+      if (cluster.threads[follower_index].joinable())
+      {
+        cluster.threads[follower_index].join();
+      }
+
+      snapshotConfig snapshot_config;
+      snapshot_config.enabled = false;
+      auto restarted_follower = std::make_shared<RaftNode>(configs[follower_index], snapshot_config);
+      cluster.nodes[follower_index] = restarted_follower;
+      cluster.threads[follower_index] = std::thread([restarted_follower]()
+                                                    {
     restarted_follower->Start();
-    restarted_follower->Wait();
-  });
+    restarted_follower->Wait(); });
 
-  EXPECT_TRUE(WaitUntilValue(cluster.nodes, "first", "100", 8s));
-  EXPECT_TRUE(WaitUntilValue(cluster.nodes, "second", "200", 8s));
+      EXPECT_TRUE(WaitUntilValue(cluster.nodes, "first", "100", 8s));
+      EXPECT_TRUE(WaitUntilValue(cluster.nodes, "second", "200", 8s));
 
-  StopCluster(&cluster);
-}
+      StopCluster(&cluster);
+    }
 
-}  // namespace
-}  // namespace raftdemo
+  } // namespace
+} // namespace raftdemo

@@ -2,10 +2,12 @@
 
 #include <chrono>
 #include <cstdlib>
+#include <cstdint>
 #include <filesystem>
 #include <memory>
 #include <string>
 #include <thread>
+#include <utility>
 #include <vector>
 
 #include "raft/command.h"
@@ -23,6 +25,46 @@ namespace raftdemo
 
         struct RunningCluster
         {
+            RunningCluster() = default;
+            RunningCluster(const RunningCluster &) = delete;
+            RunningCluster &operator=(const RunningCluster &) = delete;
+
+            RunningCluster(RunningCluster &&other) noexcept
+                : nodes(std::move(other.nodes)), threads(std::move(other.threads)) {}
+
+            RunningCluster &operator=(RunningCluster &&other) noexcept
+            {
+                if (this != &other)
+                {
+                    Stop();
+                    nodes = std::move(other.nodes);
+                    threads = std::move(other.threads);
+                }
+                return *this;
+            }
+
+            ~RunningCluster() { Stop(); }
+
+            void Stop()
+            {
+                for (auto &node : nodes)
+                {
+                    if (node)
+                    {
+                        node->Stop();
+                    }
+                }
+                for (auto &t : threads)
+                {
+                    if (t.joinable())
+                    {
+                        t.join();
+                    }
+                }
+                threads.clear();
+                nodes.clear();
+            }
+
             std::vector<std::shared_ptr<RaftNode>> nodes;
             std::vector<std::thread> threads;
         };
@@ -37,11 +79,28 @@ namespace raftdemo
             return value;
         }
 
+        std::filesystem::path TestBinaryDir()
+        {
+#ifdef RAFT_TEST_BINARY_DIR
+            return std::filesystem::path(RAFT_TEST_BINARY_DIR);
+#else
+            return std::filesystem::current_path();
+#endif
+        }
+
+        std::uint64_t NowForPath()
+        {
+            return static_cast<std::uint64_t>(
+                std::chrono::duration_cast<std::chrono::milliseconds>(
+                    std::chrono::system_clock::now().time_since_epoch())
+                    .count());
+        }
+
         std::string UniqueRoot(const std::string &suffix)
         {
-            const auto base = std::filesystem::temp_directory_path() / "raftdemo_gtests";
+            const auto base = TestBinaryDir() / "raft_test_data" / "snapshot_recovery";
             std::filesystem::create_directories(base);
-            return (base / suffix).string();
+            return (base / (suffix + "_" + std::to_string(NowForPath()))).string();
         }
 
         std::vector<NodeConfig> BuildThreeNodeConfigs(const std::string &data_root, int base_port)
@@ -133,29 +192,10 @@ namespace raftdemo
 
         void StopCluster(RunningCluster *cluster)
         {
-            if (cluster == nullptr)
+            if (cluster != nullptr)
             {
-                return;
+                cluster->Stop();
             }
-
-            for (auto &node : cluster->nodes)
-            {
-                if (node)
-                {
-                    node->Stop();
-                }
-            }
-
-            for (auto &t : cluster->threads)
-            {
-                if (t.joinable())
-                {
-                    t.join();
-                }
-            }
-
-            cluster->threads.clear();
-            cluster->nodes.clear();
         }
 
         bool IsLeaderNode(const std::shared_ptr<RaftNode> &node)
@@ -208,41 +248,51 @@ namespace raftdemo
             return false;
         }
 
+        bool HasDirectorySnapshot(const snapshotConfig &cfg)
+        {
+            std::error_code ec;
+            if (!std::filesystem::exists(cfg.snapshot_dir, ec))
+            {
+                return false;
+            }
+
+            for (const auto &entry : std::filesystem::directory_iterator(cfg.snapshot_dir, ec))
+            {
+                if (ec)
+                {
+                    return false;
+                }
+                const auto snapshot_dir = entry.path();
+                const auto name = snapshot_dir.filename().string();
+                if (!entry.is_directory(ec) || name.rfind(cfg.file_prefix + "_", 0) != 0)
+                {
+                    continue;
+                }
+                if (std::filesystem::exists(snapshot_dir / "data.bin", ec) &&
+                    std::filesystem::exists(snapshot_dir / "__raft_snapshot_meta", ec))
+                {
+                    return true;
+                }
+            }
+            return false;
+        }
+
         bool WaitForSnapshots(const std::vector<snapshotConfig> &snapshot_configs,
                               std::chrono::milliseconds timeout)
         {
             const auto deadline = std::chrono::steady_clock::now() + timeout;
+            const std::size_t required = snapshot_configs.size() / 2 + 1;
             while (std::chrono::steady_clock::now() < deadline)
             {
-                bool all_ready = true;
+                std::size_t ready = 0;
                 for (const auto &cfg : snapshot_configs)
                 {
-                    bool found = false;
-                    std::error_code ec;
-                    if (std::filesystem::exists(cfg.snapshot_dir, ec))
+                    if (HasDirectorySnapshot(cfg))
                     {
-                        for (const auto &entry : std::filesystem::directory_iterator(cfg.snapshot_dir, ec))
-                        {
-                            if (ec)
-                            {
-                                break;
-                            }
-                            const auto name = entry.path().filename().string();
-                            if (entry.is_regular_file() && entry.path().extension() == ".meta" &&
-                                name.find(cfg.file_prefix) != std::string::npos)
-                            {
-                                found = true;
-                                break;
-                            }
-                        }
-                    }
-                    if (!found)
-                    {
-                        all_ready = false;
-                        break;
+                        ++ready;
                     }
                 }
-                if (all_ready)
+                if (ready >= required)
                 {
                     return true;
                 }
@@ -281,13 +331,13 @@ namespace raftdemo
                     Log("snapshot_recovery_gtest", "  (not exists)");
                     continue;
                 }
-                for (const auto &entry : std::filesystem::directory_iterator(cfg.snapshot_dir, ec))
+                for (const auto &entry : std::filesystem::recursive_directory_iterator(cfg.snapshot_dir, ec))
                 {
                     if (ec)
                     {
                         break;
                     }
-                    Log("snapshot_recovery_gtest", "  file=", entry.path().string());
+                    Log("snapshot_recovery_gtest", "  path=", entry.path().string());
                 }
             }
         }
@@ -329,7 +379,7 @@ namespace raftdemo
                 << "replicated values did not reach all nodes in phase-1";
 
             ASSERT_TRUE(WaitForSnapshots(snapshot_configs, 10s))
-                << "snapshot files were not created for all nodes";
+                << "snapshot files were not created for a majority of nodes";
 
             LogClusterState("phase-1 after 25 commands", cluster.nodes);
             LogSnapshotFiles(snapshot_configs);

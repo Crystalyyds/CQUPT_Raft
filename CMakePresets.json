@@ -1,0 +1,53 @@
+{
+    "version": 6,
+    "configurePresets": [
+        {
+            "name": "debug-ninja-low-parallel",
+            "displayName": "Debug Ninja low parallel",
+            "generator": "Ninja",
+            "binaryDir": "${sourceDir}/build",
+            "cacheVariables": {
+                "CMAKE_BUILD_TYPE": "Debug",
+                "RAFT_BUILD_JOBS": "2",
+                "RAFT_LINK_JOBS": "1",
+                "RAFT_PROTO_JOBS": "1"
+            }
+        },
+        {
+            "name": "debug-ninja-safe",
+            "displayName": "Debug Ninja safe single job",
+            "generator": "Ninja",
+            "binaryDir": "${sourceDir}/build",
+            "cacheVariables": {
+                "CMAKE_BUILD_TYPE": "Debug",
+                "RAFT_BUILD_JOBS": "1",
+                "RAFT_LINK_JOBS": "1",
+                "RAFT_PROTO_JOBS": "1"
+            }
+        }
+    ],
+    "buildPresets": [
+        {
+            "name": "debug-ninja-low-parallel",
+            "displayName": "Build Debug Ninja low parallel",
+            "configurePreset": "debug-ninja-low-parallel",
+            "jobs": 2
+        },
+        {
+            "name": "debug-ninja-safe",
+            "displayName": "Build Debug Ninja safe single job",
+            "configurePreset": "debug-ninja-safe",
+            "jobs": 1
+        }
+    ],
+    "testPresets": [
+        {
+            "name": "debug-tests",
+            "displayName": "Run Debug tests",
+            "configurePreset": "debug-ninja-low-parallel",
+            "output": {
+                "outputOnFailure": true
+            }
+        }
+    ]
+}

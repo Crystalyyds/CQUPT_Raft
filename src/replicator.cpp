@@ -1,7 +1,9 @@
 #include "raft/replicator.h"
 
 #include <algorithm>
+#include <chrono>
 #include <limits>
+#include <sstream>
 #include <string>
 #include <utility>
 
@@ -14,6 +16,8 @@ namespace raftdemo
   {
     constexpr std::size_t kMaxAppendEntriesPerRpc = 256;
     constexpr std::size_t kMaxAppendEntriesBytes = 512 * 1024;
+    constexpr auto kInitialRetryBackoff = std::chrono::milliseconds(20);
+    constexpr auto kMaxRetryBackoff = std::chrono::milliseconds(500);
 
     std::uint64_t SafeAddOne(std::uint64_t value)
     {
@@ -22,7 +26,7 @@ namespace raftdemo
   } // namespace
 
   Replicator::Replicator(RaftNode &node, PeerConfig peer)
-      : node_(node), peer_(std::move(peer))
+      : node_(node), peer_(std::move(peer)), retry_backoff_(kInitialRetryBackoff)
   {
   }
 
@@ -31,46 +35,131 @@ namespace raftdemo
     return peer_.node_id;
   }
 
+  bool Replicator::HasInflightRpc() const
+  {
+    std::lock_guard<std::mutex> lk(mu_);
+    return append_inflight_ || snapshot_inflight_;
+  }
+
+  std::string Replicator::DebugString() const
+  {
+    std::lock_guard<std::mutex> lk(mu_);
+    std::ostringstream oss;
+    oss << "peer=" << peer_.node_id
+        << ", append_inflight=" << append_inflight_
+        << ", snapshot_inflight=" << snapshot_inflight_
+        << ", backoff_ms=" << retry_backoff_.count()
+        << ", append_rpc_started=" << append_rpc_started_
+        << ", append_rpc_finished=" << append_rpc_finished_
+        << ", snapshot_rpc_started=" << snapshot_rpc_started_
+        << ", snapshot_rpc_finished=" << snapshot_rpc_finished_
+        << ", transport_failures=" << transport_failures_;
+    return oss.str();
+  }
+
   bool Replicator::ReplicateOnce(std::uint64_t leader_term, std::uint64_t target_index,
                                  bool *should_apply)
   {
-    std::lock_guard<std::mutex> replicator_lk(mu_);
     if (should_apply != nullptr)
     {
       *should_apply = false;
     }
 
-    bool should_install_snapshot = false;
     raft::AppendEntriesRequest request;
-    if (!BuildAppendEntriesRequest(leader_term, &request, &should_install_snapshot))
-    {
-      return false;
-    }
+    bool should_install_snapshot = false;
 
-    if (should_install_snapshot)
     {
-      if (!node_.SendInstallSnapshotToPeer(peer_.node_id, leader_term))
-      {
-        return false;
-      }
+      std::lock_guard<std::mutex> replicator_lk(mu_);
 
-      if (target_index == 0)
+      if (IsTargetMatched(target_index))
       {
         return true;
       }
 
-      std::lock_guard<std::mutex> lk(node_.mu_);
-      const auto it = node_.match_index_.find(peer_.node_id);
-      return it != node_.match_index_.end() && it->second >= target_index;
+      // A single follower may have slow network or an unavailable server.  Do
+      // not let heartbeats/proposes create concurrent RPCs to the same peer.
+      if (append_inflight_ || snapshot_inflight_)
+      {
+        return false;
+      }
+
+      const auto now = std::chrono::steady_clock::now();
+      if (IsBackoffActiveLocked(now))
+      {
+        return false;
+      }
+
+      if (!BuildAppendEntriesRequest(leader_term, &request, &should_install_snapshot))
+      {
+        return false;
+      }
+
+      if (should_install_snapshot)
+      {
+        snapshot_inflight_ = true;
+        ++snapshot_rpc_started_;
+      }
+      else
+      {
+        append_inflight_ = true;
+        ++append_rpc_started_;
+      }
+    }
+
+    if (should_install_snapshot)
+    {
+      const bool ok = node_.SendInstallSnapshotToPeer(peer_.node_id, leader_term);
+
+      {
+        std::lock_guard<std::mutex> replicator_lk(mu_);
+        FinishSnapshotRpcLocked();
+        if (ok)
+        {
+          ResetBackoffLocked();
+        }
+        else
+        {
+          RecordTransportFailureLocked();
+        }
+      }
+
+      if (target_index == 0)
+      {
+        return ok;
+      }
+      return ok && IsTargetMatched(target_index);
     }
 
     auto response = node_.AppendEntriesRpc(peer_.node_id, request);
     if (!response.has_value())
     {
+      std::lock_guard<std::mutex> replicator_lk(mu_);
+      FinishAppendRpcLocked();
+      RecordTransportFailureLocked();
       return false;
     }
 
-    return HandleAppendEntriesResponse(leader_term, target_index, *response, should_apply);
+    bool matched = false;
+    bool response_success = response->success();
+    matched = HandleAppendEntriesResponse(leader_term, target_index, *response, should_apply);
+
+    {
+      std::lock_guard<std::mutex> replicator_lk(mu_);
+      FinishAppendRpcLocked();
+      // A successful AppendEntries or a valid rejection both mean the peer
+      // responded and the replication state moved forward or backward
+      // deliberately.  Only transport failures/backpressure use retry backoff.
+      if (response_success)
+      {
+        ResetBackoffLocked();
+      }
+      else
+      {
+        next_retry_time_ = std::chrono::steady_clock::now();
+      }
+    }
+
+    return matched;
   }
 
   bool Replicator::BuildAppendEntriesRequest(std::uint64_t leader_term,
@@ -97,6 +186,8 @@ namespace raftdemo
       next_index = SafeAddOne(node_.LastLogIndexLocked());
     }
 
+    // If the follower needs a log entry earlier than the first log retained by
+    // the leader, normal AppendEntries cannot repair it.  Install snapshot first.
     if (next_index <= node_.FirstLogIndexLocked())
     {
       *should_install_snapshot = true;
@@ -201,7 +292,53 @@ namespace raftdemo
       next_index = 1;
     }
 
+    // Do not clamp next_index to FirstLogIndex here.  Leaving it below the
+    // retained log boundary lets BuildAppendEntriesRequest switch to
+    // InstallSnapshot on the next attempt.
     return false;
+  }
+
+  bool Replicator::IsTargetMatched(std::uint64_t target_index) const
+  {
+    if (target_index == 0)
+    {
+      return false;
+    }
+
+    std::lock_guard<std::mutex> lk(node_.mu_);
+    const auto it = node_.match_index_.find(peer_.node_id);
+    return it != node_.match_index_.end() && it->second >= target_index;
+  }
+
+  bool Replicator::IsBackoffActiveLocked(std::chrono::steady_clock::time_point now) const
+  {
+    return next_retry_time_ != std::chrono::steady_clock::time_point{} && now < next_retry_time_;
+  }
+
+  void Replicator::ResetBackoffLocked()
+  {
+    retry_backoff_ = kInitialRetryBackoff;
+    next_retry_time_ = std::chrono::steady_clock::time_point{};
+  }
+
+  void Replicator::RecordTransportFailureLocked()
+  {
+    ++transport_failures_;
+    const auto now = std::chrono::steady_clock::now();
+    next_retry_time_ = now + retry_backoff_;
+    retry_backoff_ = std::min(kMaxRetryBackoff, retry_backoff_ * 2);
+  }
+
+  void Replicator::FinishAppendRpcLocked()
+  {
+    append_inflight_ = false;
+    ++append_rpc_finished_;
+  }
+
+  void Replicator::FinishSnapshotRpcLocked()
+  {
+    snapshot_inflight_ = false;
+    ++snapshot_rpc_finished_;
   }
 
 } // namespace raftdemo

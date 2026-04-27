@@ -2,6 +2,7 @@
 
 #include <chrono>
 #include <cstdlib>
+#include <cstdint>
 #include <filesystem>
 #include <memory>
 #include <optional>
@@ -101,6 +102,15 @@ namespace raftdemo
       return 35000 + jitter + tick;
     }
 
+    std::filesystem::path TestBinaryDir()
+    {
+#ifdef RAFT_TEST_BINARY_DIR
+      return std::filesystem::path(RAFT_TEST_BINARY_DIR);
+#else
+      return std::filesystem::current_path();
+#endif
+    }
+
     std::filesystem::path MakeTestRoot(const std::string &test_name)
     {
       std::random_device rd;
@@ -116,7 +126,7 @@ namespace raftdemo
       const std::string name = "raft_kv_gtest_" + safe_name + "_" +
                                std::to_string(NowForPath()) + "_" +
                                std::to_string(rd());
-      return std::filesystem::temp_directory_path() / name;
+      return TestBinaryDir() / "raft_test_data" / "integration" / name;
     }
 
     std::vector<NodeConfig> BuildThreeNodeConfigs(const std::filesystem::path &data_root,
@@ -431,9 +441,18 @@ namespace raftdemo
         {
           return false;
         }
-        if (entry.is_regular_file(ec) && entry.path().extension() == ".meta")
+        if (!entry.is_regular_file(ec))
         {
-          return true;
+          continue;
+        }
+        const auto name = entry.path().filename().string();
+        if (name == "__raft_snapshot_meta")
+        {
+          const auto snapshot_dir = entry.path().parent_path();
+          if (std::filesystem::exists(snapshot_dir / "data.bin", ec))
+          {
+            return true;
+          }
         }
       }
       return false;

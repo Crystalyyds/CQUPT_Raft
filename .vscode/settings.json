@@ -1,4 +1,25 @@
 {
     "C_Cpp.default.compileCommands": "${workspaceFolder}/build/compile_commands.json",
-    "cmake.configureOnOpen": true
+    "cmake.configureOnOpen": true,
+    "cmake.generator": "Ninja",
+    "cmake.buildDirectory": "${workspaceFolder}/build",
+    "cmake.configureArgs": [
+        "-DRAFT_BUILD_JOBS=2",
+        "-DRAFT_LINK_JOBS=1",
+        "-DRAFT_PROTO_JOBS=1"
+    ],
+    "cmake.buildArgs": [
+        "--parallel",
+        "2"
+    ],
+    "cmake.testArgs": [
+        "--output-on-failure"
+    ],
+    "files.watcherExclude": {
+        "**/build/**": true,
+        "**/.git/objects/**": true
+    },
+    "search.exclude": {
+        "**/build/**": true
+    }
 }

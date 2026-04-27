@@ -8,6 +8,7 @@
 #include <memory>
 #include <optional>
 #include <random>
+#include <sstream>
 #include <string>
 #include <thread>
 #include <vector>
@@ -80,7 +81,7 @@ int PickBasePort(const std::string& test_name) {
 
   std::random_device rd;
   const int jitter = static_cast<int>(rd() % 10000);
-  return 36000 + name_offset + jitter;
+  return 42000 + name_offset + jitter;
 }
 
 std::filesystem::path MakeTestRoot(const std::string& test_name) {
@@ -92,7 +93,7 @@ std::filesystem::path MakeTestRoot(const std::string& test_name) {
     }
   }
 
-  const std::string name = "raft_snapshot_catchup_" + safe_name + "_" +
+  const std::string name = "raft_snapshot_diagnosis_" + safe_name + "_" +
                            std::to_string(NowForPath()) + "_" +
                            std::to_string(rd());
   std::filesystem::path base_dir;
@@ -147,30 +148,22 @@ std::vector<NodeConfig> BuildThreeNodeConfigs(const std::filesystem::path& data_
   n1.rpc_deadline = std::chrono::milliseconds(300);
   n1.data_dir = (data_root / "node_1").string();
 
-  NodeConfig n2;
+  NodeConfig n2 = n1;
   n2.node_id = 2;
   n2.address = "127.0.0.1:" + std::to_string(base_port + 2);
   n2.peers = {
       PeerConfig{1, "127.0.0.1:" + std::to_string(base_port + 1)},
       PeerConfig{3, "127.0.0.1:" + std::to_string(base_port + 3)},
   };
-  n2.election_timeout_min = std::chrono::milliseconds(250);
-  n2.election_timeout_max = std::chrono::milliseconds(500);
-  n2.heartbeat_interval = std::chrono::milliseconds(80);
-  n2.rpc_deadline = std::chrono::milliseconds(300);
   n2.data_dir = (data_root / "node_2").string();
 
-  NodeConfig n3;
+  NodeConfig n3 = n1;
   n3.node_id = 3;
   n3.address = "127.0.0.1:" + std::to_string(base_port + 3);
   n3.peers = {
       PeerConfig{1, "127.0.0.1:" + std::to_string(base_port + 1)},
       PeerConfig{2, "127.0.0.1:" + std::to_string(base_port + 2)},
   };
-  n3.election_timeout_min = std::chrono::milliseconds(250);
-  n3.election_timeout_max = std::chrono::milliseconds(500);
-  n3.heartbeat_interval = std::chrono::milliseconds(80);
-  n3.rpc_deadline = std::chrono::milliseconds(300);
   n3.data_dir = (data_root / "node_3").string();
 
   return {n1, n2, n3};
@@ -225,6 +218,19 @@ class TestCluster {
     }
   }
 
+  void StartOnly(std::size_t index) {
+    StopAll();
+    nodes_.assign(configs_.size(), nullptr);
+    wait_threads_.clear();
+    wait_threads_.resize(configs_.size());
+
+    ASSERT_LT(index, configs_.size());
+    nodes_[index] = std::make_shared<RaftNode>(configs_[index], snapshot_configs_[index]);
+    nodes_[index]->Start();
+    const auto node = nodes_[index];
+    wait_threads_[index] = std::thread([node]() { node->Wait(); });
+  }
+
   void StopAll() {
     for (const auto& node : nodes_) {
       if (node) {
@@ -275,6 +281,41 @@ class TestCluster {
   std::vector<std::thread> wait_threads_;
 };
 
+std::string DescribeAllNodes(const std::vector<std::shared_ptr<RaftNode>>& nodes) {
+  std::ostringstream oss;
+  for (std::size_t i = 0; i < nodes.size(); ++i) {
+    oss << "node[" << i << "] ";
+    if (nodes[i]) {
+      oss << nodes[i]->Describe();
+    } else {
+      oss << "<not running>";
+    }
+    oss << '\n';
+  }
+  return oss.str();
+}
+
+std::string DescribeValueOnAllNodes(const std::vector<std::shared_ptr<RaftNode>>& nodes,
+                                    const std::string& key) {
+  std::ostringstream oss;
+  oss << "key='" << key << "' values:\n";
+  for (std::size_t i = 0; i < nodes.size(); ++i) {
+    oss << "node[" << i << "] ";
+    if (!nodes[i]) {
+      oss << "<not running>\n";
+      continue;
+    }
+    std::string value;
+    if (nodes[i]->DebugGetValue(key, &value)) {
+      oss << "value='" << value << "'";
+    } else {
+      oss << "<missing>";
+    }
+    oss << " | " << nodes[i]->Describe() << '\n';
+  }
+  return oss.str();
+}
+
 bool IsExcluded(std::size_t index, const std::vector<std::size_t>& excluded) {
   for (std::size_t excluded_index : excluded) {
     if (index == excluded_index) {
@@ -316,16 +357,6 @@ std::size_t FindNodeIndex(const std::vector<std::shared_ptr<RaftNode>>& nodes,
                           const std::shared_ptr<RaftNode>& target) {
   for (std::size_t i = 0; i < nodes.size(); ++i) {
     if (nodes[i] == target) {
-      return i;
-    }
-  }
-  return nodes.size();
-}
-
-std::size_t PickFollowerIndex(const std::vector<std::shared_ptr<RaftNode>>& nodes,
-                              const std::shared_ptr<RaftNode>& leader) {
-  for (std::size_t i = 0; i < nodes.size(); ++i) {
-    if (nodes[i] && nodes[i] != leader) {
       return i;
     }
   }
@@ -452,7 +483,7 @@ void WriteManyValues(const std::vector<std::shared_ptr<RaftNode>>& nodes,
   }
 }
 
-class RaftSnapshotCatchupTest : public ::testing::Test {
+class RaftSnapshotDiagnosisTest : public ::testing::Test {
  protected:
   void SetUp() override {
     const auto* test_info = ::testing::UnitTest::GetInstance()->current_test_info();
@@ -501,127 +532,111 @@ class RaftSnapshotCatchupTest : public ::testing::Test {
   int base_port_{0};
 };
 
-TEST_F(RaftSnapshotCatchupTest, RestartedFollowerCatchesUpLargeGapWithBatchedAppendEntries) {
-  auto cluster = MakeCluster("batched_append_entries", false, 1000000);
+TEST_F(RaftSnapshotDiagnosisTest, RestartedSingleNodeLoadsSnapshotAndTailLogsWithoutPeers) {
+  auto cluster = MakeCluster("local_recovery_snapshot_tail", true, 12);
   cluster.Start();
 
   auto leader = WaitForSingleLeader(cluster.Nodes(), std::chrono::seconds(8));
-  ASSERT_NE(leader, nullptr) << "no leader elected";
+  ASSERT_NE(leader, nullptr) << "no leader elected\n" << DescribeAllNodes(cluster.Nodes());
 
-  const std::size_t stopped_follower = PickFollowerIndex(cluster.Nodes(), leader);
-  ASSERT_LT(stopped_follower, cluster.Nodes().size()) << "failed to pick follower";
-  cluster.StopNode(stopped_follower);
+  WriteManyValues(cluster.Nodes(), "recovery_base", 30);
 
-  const std::vector<std::size_t> excluded{stopped_follower};
-  WriteManyValues(cluster.Nodes(), "batch_gap", 320, excluded);
+  ASSERT_TRUE(WaitForValueOnAll(cluster.Nodes(), "recovery_base_29", "value_29",
+                                std::chrono::seconds(15)))
+      << DescribeValueOnAllNodes(cluster.Nodes(), "recovery_base_29");
 
-  ASSERT_TRUE(WaitForValueOnAll(cluster.Nodes(), "batch_gap_319", "value_319",
-                                std::chrono::seconds(10), excluded))
-      << "surviving majority did not apply the last batch value";
+  const std::size_t target_index = 0;
+  ASSERT_TRUE(WaitForNodeFieldAtLeast(cluster.Nodes()[target_index],
+                                      "last_snapshot_index",
+                                      12,
+                                      std::chrono::seconds(20)))
+      << "target node did not create a snapshot before tail logs\n"
+      << DescribeAllNodes(cluster.Nodes());
 
-  cluster.RestartNode(stopped_follower);
+  WriteManyValues(cluster.Nodes(), "recovery_tail", 3);
 
-  ASSERT_TRUE(WaitForValueOnNode(cluster.Nodes()[stopped_follower],
-                                 "batch_gap_319", "value_319",
-                                 std::chrono::seconds(30)))
-      << "restarted follower did not catch up through batched AppendEntries, describe="
-      << cluster.Nodes()[stopped_follower]->Describe();
+  ASSERT_TRUE(WaitForValueOnAll(cluster.Nodes(), "recovery_tail_2", "value_2",
+                                std::chrono::seconds(15)))
+      << DescribeValueOnAllNodes(cluster.Nodes(), "recovery_tail_2");
 
-  ASSERT_TRUE(WaitForNodeFieldAtLeast(cluster.Nodes()[stopped_follower],
-                                      "last_applied", 320,
-                                      std::chrono::seconds(10)))
-      << "restarted follower last_applied did not advance enough, describe="
-      << cluster.Nodes()[stopped_follower]->Describe();
+  cluster.StopAll();
+  cluster.StartOnly(target_index);
+
+  ASSERT_TRUE(WaitForValueOnNode(cluster.Nodes()[target_index],
+                                 "recovery_base_29",
+                                 "value_29",
+                                 std::chrono::seconds(3)))
+      << "snapshot-covered value was not restored from local files. "
+      << "Suspect startup snapshot loading path in raft_node.cpp/snapshot_storage.cpp.\n"
+      << DescribeValueOnAllNodes(cluster.Nodes(), "recovery_base_29");
+
+  ASSERT_TRUE(WaitForValueOnNode(cluster.Nodes()[target_index],
+                                 "recovery_tail_2",
+                                 "value_2",
+                                 std::chrono::seconds(3)))
+      << "post-snapshot tail log was not restored when the node started without peers. "
+      << "Suspect startup log replay/apply path in raft_node.cpp or raft_storage.cpp.\n"
+      << DescribeValueOnAllNodes(cluster.Nodes(), "recovery_tail_2");
+
+  ASSERT_TRUE(WaitForNodeFieldAtLeast(cluster.Nodes()[target_index],
+                                      "last_snapshot_index",
+                                      12,
+                                      std::chrono::seconds(3)))
+      << "snapshot metadata was lost after local restart. "
+      << "Suspect snapshot metadata loading in raft_node.cpp/snapshot_storage.cpp.\n"
+      << DescribeAllNodes(cluster.Nodes());
 }
 
-TEST_F(RaftSnapshotCatchupTest, RestartedFollowerInstallsSnapshotWhenLeaderCompactedLogs) {
-  auto cluster = MakeCluster("install_snapshot", true, 6);
+TEST_F(RaftSnapshotDiagnosisTest, CompactedClusterReplicatesNewLogAfterRestartedLeaderStepsDown) {
+  auto cluster = MakeCluster("replication_after_compacted_restart", true, 6);
   cluster.Start();
 
   auto leader = WaitForSingleLeader(cluster.Nodes(), std::chrono::seconds(8));
-  ASSERT_NE(leader, nullptr) << "no leader elected";
+  ASSERT_NE(leader, nullptr) << "no leader elected\n" << DescribeAllNodes(cluster.Nodes());
 
-  const std::size_t leader_index = FindNodeIndex(cluster.Nodes(), leader);
-  ASSERT_LT(leader_index, cluster.Nodes().size()) << "failed to locate leader";
+  WriteManyValues(cluster.Nodes(), "replication_base", 32);
 
-  const std::size_t stopped_follower = PickFollowerIndex(cluster.Nodes(), leader);
-  ASSERT_LT(stopped_follower, cluster.Nodes().size()) << "failed to pick follower";
-  cluster.StopNode(stopped_follower);
+  leader = WaitForSingleLeader(cluster.Nodes(), std::chrono::seconds(8));
+  ASSERT_NE(leader, nullptr) << "no leader after writes\n" << DescribeAllNodes(cluster.Nodes());
+  const std::size_t restarted_index = FindNodeIndex(cluster.Nodes(), leader);
+  ASSERT_LT(restarted_index, cluster.Nodes().size()) << "failed to locate leader";
 
-  const std::vector<std::size_t> excluded{stopped_follower};
-  WriteManyValues(cluster.Nodes(), "snapshot_gap", 48, excluded);
-
-  ASSERT_TRUE(WaitForValueOnAll(cluster.Nodes(), "snapshot_gap_47", "value_47",
-                                std::chrono::seconds(10), excluded))
-      << "surviving majority did not apply the last snapshot_gap value";
-
-  ASSERT_TRUE(WaitForNodeFieldAtLeast(cluster.Nodes()[leader_index],
-                                      "last_snapshot_index", 6,
+  ASSERT_TRUE(WaitForNodeFieldAtLeast(cluster.Nodes()[restarted_index],
+                                      "last_snapshot_index",
+                                      6,
                                       std::chrono::seconds(20)))
-      << "leader did not compact logs through snapshot, describe="
-      << cluster.Nodes()[leader_index]->Describe();
+      << "leader did not compact through snapshot before restart\n"
+      << DescribeAllNodes(cluster.Nodes());
 
-  cluster.RestartNode(stopped_follower);
+  cluster.RestartNode(restarted_index);
 
-  ASSERT_TRUE(WaitForValueOnNode(cluster.Nodes()[stopped_follower],
-                                 "snapshot_gap_47", "value_47",
-                                 std::chrono::seconds(30)))
-      << "restarted follower did not install snapshot and catch up, describe="
-      << cluster.Nodes()[stopped_follower]->Describe();
-
-  ASSERT_TRUE(WaitForNodeFieldAtLeast(cluster.Nodes()[stopped_follower],
-                                      "last_snapshot_index", 6,
-                                      std::chrono::seconds(10)))
-      << "restarted follower did not record installed snapshot index, describe="
-      << cluster.Nodes()[stopped_follower]->Describe();
-}
-
-TEST_F(RaftSnapshotCatchupTest, FollowerContinuesReplicatingLogsAfterInstallingSnapshot) {
-  auto cluster = MakeCluster("snapshot_then_logs", true, 6);
-  cluster.Start();
-
-  auto leader = WaitForSingleLeader(cluster.Nodes(), std::chrono::seconds(8));
-  ASSERT_NE(leader, nullptr) << "no leader elected";
-
-  const std::size_t leader_index = FindNodeIndex(cluster.Nodes(), leader);
-  ASSERT_LT(leader_index, cluster.Nodes().size()) << "failed to locate leader";
-
-  const std::size_t stopped_follower = PickFollowerIndex(cluster.Nodes(), leader);
-  ASSERT_LT(stopped_follower, cluster.Nodes().size()) << "failed to pick follower";
-  cluster.StopNode(stopped_follower);
-
-  const std::vector<std::size_t> excluded{stopped_follower};
-  WriteManyValues(cluster.Nodes(), "install_first", 40, excluded);
-
-  ASSERT_TRUE(WaitForNodeFieldAtLeast(cluster.Nodes()[leader_index],
-                                      "last_snapshot_index", 6,
-                                      std::chrono::seconds(20)))
-      << "leader did not create a usable snapshot, describe="
-      << cluster.Nodes()[leader_index]->Describe();
-
-  cluster.RestartNode(stopped_follower);
-
-  ASSERT_TRUE(WaitForValueOnNode(cluster.Nodes()[stopped_follower],
-                                 "install_first_39", "value_39",
-                                 std::chrono::seconds(30)))
-      << "restarted follower did not catch up to snapshot baseline, describe="
-      << cluster.Nodes()[stopped_follower]->Describe();
-
-  ASSERT_TRUE(WaitForNodeFieldAtLeast(cluster.Nodes()[stopped_follower],
-                                      "last_snapshot_index", 6,
-                                      std::chrono::seconds(10)))
-      << "restarted follower did not install snapshot, describe="
-      << cluster.Nodes()[stopped_follower]->Describe();
+  ASSERT_TRUE(WaitForValueOnNode(cluster.Nodes()[restarted_index],
+                                 "replication_base_31",
+                                 "value_31",
+                                 std::chrono::seconds(10)))
+      << "restarted compacted node failed local recovery. "
+      << "Run RestartedSingleNodeLoadsSnapshotAndTailLogsWithoutPeers first; "
+      << "suspect raft_node.cpp startup recovery or raft_storage.cpp.\n"
+      << DescribeValueOnAllNodes(cluster.Nodes(), "replication_base_31");
 
   ProposeResult result;
-  ASSERT_TRUE(ProposeWithRetry(cluster.Nodes(), SetCommand("after_snapshot", "ok"),
-                               std::chrono::seconds(10), &result))
-      << "write after snapshot failed, status=" << ProposeStatusName(result.status)
-      << ", message=" << result.message;
+  ASSERT_TRUE(ProposeWithRetry(cluster.Nodes(),
+                               SetCommand("diagnosis_after_restart", "ok"),
+                               std::chrono::seconds(15),
+                               &result))
+      << "new write after compacted restart failed, status="
+      << ProposeStatusName(result.status) << ", message=" << result.message
+      << "\n" << DescribeAllNodes(cluster.Nodes());
 
-  ASSERT_TRUE(WaitForValueOnAll(cluster.Nodes(), "after_snapshot", "ok",
-                                std::chrono::seconds(15)))
-      << "not all nodes replicated logs after snapshot installation";
+  ASSERT_TRUE(WaitForValueOnAll(cluster.Nodes(),
+                                "diagnosis_after_restart",
+                                "ok",
+                                std::chrono::seconds(20)))
+      << "new committed log did not reach/apply on every node after compacted restart. "
+      << "If the previous local recovery assertion passed, suspect raft_node.cpp "
+      << "replication catch-up path: next_index initialization, compacted-log boundary, "
+      << "AppendEntries prev_log_index/term, or InstallSnapshot handoff.\n"
+      << DescribeValueOnAllNodes(cluster.Nodes(), "diagnosis_after_restart");
 }
 
 }  // namespace
