@@ -120,9 +120,17 @@ namespace raftdemo
 
     static const char *RoleName(Role role);
 
+    enum class ReplicationResult
+    {
+      kReplicated,
+      kNoLongerLeader,
+      kLogUnavailable,
+      kTimeout,
+    };
+
     bool ValidateCommandUnlocked(const Command &command, std::string *reason) const;
     std::uint64_t AppendLocalLogUnlocked(const std::string &command_data);
-    bool ReplicateLogEntryToMajority(std::uint64_t log_index);
+    ReplicationResult ReplicateLogEntryToMajority(std::uint64_t log_index);
     void AdvanceCommitIndexUnlocked();
     ApplyResult ApplyCommittedEntries();
     bool PersistStateLocked(std::string *reason);

@@ -1361,12 +1361,43 @@ namespace raftdemo
       result.message = "log appended locally";
     }
 
-    // 锁外复制，避免长时间阻塞 Raft 核心状态
-    const bool replicated = ReplicateLogEntryToMajority(log_index);
-    if (!replicated)
+    // 锁外复制，避免长时间阻塞 Raft 核心状态。
+    // 少数派 leader 不能提交日志；这里返回 timeout/unknown，避免客户端
+    // 把“没有在本轮调用拿到多数派”误解为一个确定的业务失败。
+    const ReplicationResult replicated = ReplicateLogEntryToMajority(log_index);
+    if (replicated != ReplicationResult::kReplicated)
     {
-      result.status = ProposeStatus::kReplicationFailed;
-      result.message = "failed to replicate log entry to majority";
+      bool still_running = false;
+      int known_leader = -1;
+      std::uint64_t observed_term = term;
+      {
+        std::lock_guard<std::mutex> lk(mu_);
+        still_running = running_.load();
+        known_leader = leader_id_;
+        observed_term = current_term_;
+      }
+
+      result.leader_id = known_leader;
+      result.term = observed_term;
+      switch (replicated)
+      {
+      case ReplicationResult::kNoLongerLeader:
+        result.status = still_running ? ProposeStatus::kNotLeader : ProposeStatus::kNodeStopping;
+        result.message = still_running
+                             ? "lost leadership before log reached majority"
+                             : "node stopped before log reached majority";
+        break;
+      case ReplicationResult::kTimeout:
+        result.status = ProposeStatus::kTimeout;
+        result.message = "timed out waiting for majority replication; commit result is unknown";
+        break;
+      case ReplicationResult::kLogUnavailable:
+        result.status = ProposeStatus::kReplicationFailed;
+        result.message = "log entry became unavailable before majority replication";
+        break;
+      case ReplicationResult::kReplicated:
+        break;
+      }
       return result;
     }
 
@@ -1453,7 +1484,7 @@ namespace raftdemo
     return new_index;
   }
 
-  bool RaftNode::ReplicateLogEntryToMajority(std::uint64_t log_index)
+  RaftNode::ReplicationResult RaftNode::ReplicateLogEntryToMajority(std::uint64_t log_index)
   {
     const auto deadline = std::chrono::steady_clock::now() + config_.rpc_deadline * 20;
 
@@ -1465,11 +1496,12 @@ namespace raftdemo
         std::lock_guard<std::mutex> lk(mu_);
         if (!running_.load() || role_ != Role::kLeader)
         {
-          return false;
+          return ReplicationResult::kNoLongerLeader;
         }
         if (!HasLogAtIndexLocked(log_index))
         {
-          return log_index <= last_snapshot_index_;
+          return log_index <= last_snapshot_index_ ? ReplicationResult::kReplicated
+                                                   : ReplicationResult::kLogUnavailable;
         }
         peers = config_.peers;
         term = current_term_;
@@ -1484,7 +1516,7 @@ namespace raftdemo
       const std::size_t majority = total_nodes / 2 + 1;
       if (majority <= 1)
       {
-        return true;
+        return ReplicationResult::kReplicated;
       }
 
       {
@@ -1500,7 +1532,7 @@ namespace raftdemo
         }
         if (replicated_count >= majority)
         {
-          return true;
+          return ReplicationResult::kReplicated;
         }
       }
 
@@ -1511,7 +1543,7 @@ namespace raftdemo
           std::lock_guard<std::mutex> lk(mu_);
           if (!running_.load() || role_ != Role::kLeader || current_term_ != term)
           {
-            return false;
+            return ReplicationResult::kNoLongerLeader;
           }
           const auto it = match_index_.find(peer.node_id);
           if (it != match_index_.end() && it->second >= log_index)
@@ -1542,11 +1574,11 @@ namespace raftdemo
           std::lock_guard<std::mutex> lk(mu_);
           if (!running_.load())
           {
-            return false;
+            return ReplicationResult::kNoLongerLeader;
           }
           if (role_ != Role::kLeader || current_term_ != term)
           {
-            return false;
+            return ReplicationResult::kNoLongerLeader;
           }
           std::size_t replicated_count = 1;
           for (const auto &candidate : peers)
@@ -1559,7 +1591,7 @@ namespace raftdemo
           }
           if (replicated_count >= majority)
           {
-            return true;
+            return ReplicationResult::kReplicated;
           }
         }
       }
@@ -1567,7 +1599,7 @@ namespace raftdemo
       std::this_thread::sleep_for(std::chrono::milliseconds(20));
     }
 
-    return false;
+    return ReplicationResult::kTimeout;
   }
 
   void RaftNode::AdvanceCommitIndexUnlocked()
@@ -1927,7 +1959,7 @@ namespace raftdemo
       }
     }
 
-    if (!ReplicateLogEntryToMajority(log_index))
+    if (ReplicateLogEntryToMajority(log_index) != ReplicationResult::kReplicated)
     {
       return false;
     }
