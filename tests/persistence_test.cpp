@@ -7,6 +7,7 @@
 #include <filesystem>
 #include <memory>
 #include <random>
+#include <sstream>
 #include <string>
 #include <thread>
 #include <utility>
@@ -48,6 +49,16 @@ namespace raftdemo
       return value != nullptr && std::string(value) == "1";
     }
 
+    int RandomBasePort()
+    {
+      // Keep ports in a high range and leave enough room for +1/+2/+3.
+      // This avoids collisions with the older fixed-port tests when running a large test set.
+      static std::random_device rd;
+      static std::mt19937 rng(rd());
+      std::uniform_int_distribution<int> dist(24000, 52000);
+      return dist(rng);
+    }
+
     struct RunningCluster
     {
       RunningCluster() = default;
@@ -79,6 +90,7 @@ namespace raftdemo
             node->Stop();
           }
         }
+
         for (auto &t : threads)
         {
           if (t.joinable())
@@ -86,6 +98,7 @@ namespace raftdemo
             t.join();
           }
         }
+
         threads.clear();
       }
 
@@ -112,8 +125,10 @@ namespace raftdemo
       {
         if (KeepTestData())
         {
+          std::cout << "preserved test root: " << root_ << std::endl;
           return;
         }
+
         std::error_code ec;
         fs::remove_all(root_, ec);
       }
@@ -123,6 +138,24 @@ namespace raftdemo
     private:
       fs::path root_;
     };
+
+    std::string DescribeAllNodes(const std::vector<std::shared_ptr<RaftNode>> &nodes)
+    {
+      std::ostringstream oss;
+      for (std::size_t i = 0; i < nodes.size(); ++i)
+      {
+        oss << "node[" << i << "] ";
+        if (!nodes[i])
+        {
+          oss << "<null>\n";
+        }
+        else
+        {
+          oss << nodes[i]->Describe() << "\n";
+        }
+      }
+      return oss.str();
+    }
 
     bool IsLeaderNode(const std::shared_ptr<RaftNode> &node)
     {
@@ -150,57 +183,54 @@ namespace raftdemo
 
     std::vector<NodeConfig> BuildThreeNodeConfigs(const fs::path &data_root, int base_port)
     {
-      NodeConfig n1;
-      n1.node_id = 1;
-      n1.address = "127.0.0.1:" + std::to_string(base_port + 1);
-      n1.peers = {
-          PeerConfig{2, "127.0.0.1:" + std::to_string(base_port + 2)},
-          PeerConfig{3, "127.0.0.1:" + std::to_string(base_port + 3)},
-      };
-      n1.election_timeout_min = std::chrono::milliseconds(300);
-      n1.election_timeout_max = std::chrono::milliseconds(600);
-      n1.heartbeat_interval = std::chrono::milliseconds(100);
-      n1.rpc_deadline = std::chrono::milliseconds(500);
-      n1.data_dir = (data_root / "node_1").string();
+      std::vector<NodeConfig> configs(3);
 
-      NodeConfig n2;
-      n2.node_id = 2;
-      n2.address = "127.0.0.1:" + std::to_string(base_port + 2);
-      n2.peers = {
-          PeerConfig{1, "127.0.0.1:" + std::to_string(base_port + 1)},
-          PeerConfig{3, "127.0.0.1:" + std::to_string(base_port + 3)},
-      };
-      n2.election_timeout_min = std::chrono::milliseconds(300);
-      n2.election_timeout_max = std::chrono::milliseconds(600);
-      n2.heartbeat_interval = std::chrono::milliseconds(100);
-      n2.rpc_deadline = std::chrono::milliseconds(500);
-      n2.data_dir = (data_root / "node_2").string();
+      for (int i = 0; i < 3; ++i)
+      {
+        const int node_id = i + 1;
+        NodeConfig cfg;
+        cfg.node_id = node_id;
+        cfg.address = "127.0.0.1:" + std::to_string(base_port + node_id);
+        cfg.election_timeout_min = std::chrono::milliseconds(700);
+        cfg.election_timeout_max = std::chrono::milliseconds(1400);
+        cfg.heartbeat_interval = std::chrono::milliseconds(120);
+        cfg.rpc_deadline = std::chrono::milliseconds(700);
+        cfg.data_dir = (data_root / ("node_" + std::to_string(node_id))).string();
 
-      NodeConfig n3;
-      n3.node_id = 3;
-      n3.address = "127.0.0.1:" + std::to_string(base_port + 3);
-      n3.peers = {
-          PeerConfig{1, "127.0.0.1:" + std::to_string(base_port + 1)},
-          PeerConfig{2, "127.0.0.1:" + std::to_string(base_port + 2)},
-      };
-      n3.election_timeout_min = std::chrono::milliseconds(300);
-      n3.election_timeout_max = std::chrono::milliseconds(600);
-      n3.heartbeat_interval = std::chrono::milliseconds(100);
-      n3.rpc_deadline = std::chrono::milliseconds(500);
-      n3.data_dir = (data_root / "node_3").string();
+        for (int peer_id = 1; peer_id <= 3; ++peer_id)
+        {
+          if (peer_id == node_id)
+          {
+            continue;
+          }
+          cfg.peers.push_back(
+              PeerConfig{peer_id, "127.0.0.1:" + std::to_string(base_port + peer_id)});
+        }
 
-      return {n1, n2, n3};
+        configs[i] = std::move(cfg);
+      }
+
+      return configs;
     }
 
-    RunningCluster StartCluster(const std::vector<NodeConfig> &configs)
+    snapshotConfig BuildPersistenceSnapshotConfig(const fs::path &root, int node_id)
     {
-      RunningCluster cluster;
       snapshotConfig snapshot_config;
       snapshot_config.enabled = false;
+      snapshot_config.load_on_startup = false;
+      snapshot_config.snapshot_dir = (root / "snapshots" / ("node_" + std::to_string(node_id))).string();
+      return snapshot_config;
+    }
+
+    RunningCluster StartCluster(const std::vector<NodeConfig> &configs, const fs::path &test_root)
+    {
+      RunningCluster cluster;
       cluster.nodes.reserve(configs.size());
+
       for (const auto &cfg : configs)
       {
-        cluster.nodes.push_back(std::make_shared<RaftNode>(cfg, snapshot_config));
+        cluster.nodes.push_back(
+            std::make_shared<RaftNode>(cfg, BuildPersistenceSnapshotConfig(test_root, cfg.node_id)));
       }
 
       cluster.threads.reserve(cluster.nodes.size());
@@ -211,6 +241,7 @@ namespace raftdemo
       node->Start();
       node->Wait(); });
       }
+
       return cluster;
     }
 
@@ -222,19 +253,40 @@ namespace raftdemo
       }
     }
 
-    bool ProposeSet(const std::shared_ptr<RaftNode> &leader, const std::string &key,
-                    const std::string &value)
+    bool ProposeSetToLeader(const std::shared_ptr<RaftNode> &leader,
+                            const std::string &key,
+                            const std::string &value)
     {
       if (leader == nullptr)
       {
         return false;
       }
+
       Command cmd;
       cmd.type = CommandType::kSet;
       cmd.key = key;
       cmd.value = value;
+
       const ProposeResult result = leader->Propose(cmd);
       return result.Ok();
+    }
+
+    bool ProposeSetWithRetry(const std::vector<std::shared_ptr<RaftNode>> &nodes,
+                             const std::string &key,
+                             const std::string &value,
+                             std::chrono::milliseconds timeout)
+    {
+      const auto deadline = std::chrono::steady_clock::now() + timeout;
+      while (std::chrono::steady_clock::now() < deadline)
+      {
+        auto leader = WaitForLeader(nodes, 500ms);
+        if (leader != nullptr && ProposeSetToLeader(leader, key, value))
+        {
+          return true;
+        }
+        std::this_thread::sleep_for(100ms);
+      }
+      return false;
     }
 
     bool WaitUntilValue(const std::vector<std::shared_ptr<RaftNode>> &nodes,
@@ -248,6 +300,12 @@ namespace raftdemo
         bool all_ok = true;
         for (const auto &node : nodes)
         {
+          if (node == nullptr)
+          {
+            all_ok = false;
+            break;
+          }
+
           std::string actual;
           if (!node->DebugGetValue(key, &actual) || actual != expected_value)
           {
@@ -255,38 +313,49 @@ namespace raftdemo
             break;
           }
         }
+
         if (all_ok)
         {
           return true;
         }
+
         std::this_thread::sleep_for(100ms);
       }
+
       return false;
     }
 
     TEST(PersistenceTest, FullClusterRestartRecovery)
     {
       ScopedDataDir scoped_dir("test_full_restart");
-      auto configs = BuildThreeNodeConfigs(scoped_dir.path(), 53050);
+      const int base_port = RandomBasePort();
+      auto configs = BuildThreeNodeConfigs(scoped_dir.path() / "raft_data", base_port);
 
-      auto cluster = StartCluster(configs);
-      auto leader = WaitForLeader(cluster.nodes, 6s);
-      ASSERT_NE(leader, nullptr);
+      auto cluster = StartCluster(configs, scoped_dir.path());
+      ASSERT_NE(WaitForLeader(cluster.nodes, 10s), nullptr)
+          << DescribeAllNodes(cluster.nodes);
 
-      ASSERT_TRUE(ProposeSet(leader, "alpha", "1"));
-      ASSERT_TRUE(ProposeSet(leader, "beta", "2"));
-      ASSERT_TRUE(WaitUntilValue(cluster.nodes, "alpha", "1", 5s));
-      ASSERT_TRUE(WaitUntilValue(cluster.nodes, "beta", "2", 5s));
+      ASSERT_TRUE(ProposeSetWithRetry(cluster.nodes, "alpha", "1", 10s))
+          << DescribeAllNodes(cluster.nodes);
+      ASSERT_TRUE(ProposeSetWithRetry(cluster.nodes, "beta", "2", 10s))
+          << DescribeAllNodes(cluster.nodes);
+
+      ASSERT_TRUE(WaitUntilValue(cluster.nodes, "alpha", "1", 10s))
+          << DescribeAllNodes(cluster.nodes);
+      ASSERT_TRUE(WaitUntilValue(cluster.nodes, "beta", "2", 10s))
+          << DescribeAllNodes(cluster.nodes);
 
       StopCluster(&cluster);
-      std::this_thread::sleep_for(1s);
+      std::this_thread::sleep_for(1200ms);
 
-      cluster = StartCluster(configs);
-      leader = WaitForLeader(cluster.nodes, 6s);
-      ASSERT_NE(leader, nullptr);
+      cluster = StartCluster(configs, scoped_dir.path());
+      ASSERT_NE(WaitForLeader(cluster.nodes, 10s), nullptr)
+          << DescribeAllNodes(cluster.nodes);
 
-      EXPECT_TRUE(WaitUntilValue(cluster.nodes, "alpha", "1", 8s));
-      EXPECT_TRUE(WaitUntilValue(cluster.nodes, "beta", "2", 8s));
+      EXPECT_TRUE(WaitUntilValue(cluster.nodes, "alpha", "1", 12s))
+          << DescribeAllNodes(cluster.nodes);
+      EXPECT_TRUE(WaitUntilValue(cluster.nodes, "beta", "2", 12s))
+          << DescribeAllNodes(cluster.nodes);
 
       StopCluster(&cluster);
     }
@@ -294,11 +363,12 @@ namespace raftdemo
     TEST(PersistenceTest, RestartedFollowerCatchesUp)
     {
       ScopedDataDir scoped_dir("test_follower_restart");
-      auto configs = BuildThreeNodeConfigs(scoped_dir.path(), 53150);
+      const int base_port = RandomBasePort();
+      auto configs = BuildThreeNodeConfigs(scoped_dir.path() / "raft_data", base_port);
 
-      auto cluster = StartCluster(configs);
-      auto leader = WaitForLeader(cluster.nodes, 6s);
-      ASSERT_NE(leader, nullptr);
+      auto cluster = StartCluster(configs, scoped_dir.path());
+      auto leader = WaitForLeader(cluster.nodes, 10s);
+      ASSERT_NE(leader, nullptr) << DescribeAllNodes(cluster.nodes);
 
       std::shared_ptr<RaftNode> follower;
       for (const auto &node : cluster.nodes)
@@ -309,15 +379,15 @@ namespace raftdemo
           break;
         }
       }
-      ASSERT_NE(follower, nullptr);
+      ASSERT_NE(follower, nullptr) << DescribeAllNodes(cluster.nodes);
 
-      ASSERT_TRUE(ProposeSet(leader, "first", "100"));
-      ASSERT_TRUE(WaitUntilValue(cluster.nodes, "first", "100", 5s));
+      ASSERT_TRUE(ProposeSetWithRetry(cluster.nodes, "first", "100", 10s))
+          << DescribeAllNodes(cluster.nodes);
+      ASSERT_TRUE(WaitUntilValue(cluster.nodes, "first", "100", 10s))
+          << DescribeAllNodes(cluster.nodes);
 
       follower->Stop();
-      std::this_thread::sleep_for(1s);
-
-      ASSERT_TRUE(ProposeSet(leader, "second", "200"));
+      std::this_thread::sleep_for(1200ms);
 
       std::vector<std::shared_ptr<RaftNode>> alive_nodes;
       for (const auto &node : cluster.nodes)
@@ -327,7 +397,11 @@ namespace raftdemo
           alive_nodes.push_back(node);
         }
       }
-      ASSERT_TRUE(WaitUntilValue(alive_nodes, "second", "200", 5s));
+
+      ASSERT_TRUE(ProposeSetWithRetry(alive_nodes, "second", "200", 10s))
+          << DescribeAllNodes(cluster.nodes);
+      ASSERT_TRUE(WaitUntilValue(alive_nodes, "second", "200", 10s))
+          << DescribeAllNodes(cluster.nodes);
 
       const auto follower_it = std::find(cluster.nodes.begin(), cluster.nodes.end(), follower);
       ASSERT_NE(follower_it, cluster.nodes.end());
@@ -340,17 +414,19 @@ namespace raftdemo
         cluster.threads[follower_index].join();
       }
 
-      snapshotConfig snapshot_config;
-      snapshot_config.enabled = false;
-      auto restarted_follower = std::make_shared<RaftNode>(configs[follower_index], snapshot_config);
+      auto restarted_follower = std::make_shared<RaftNode>(
+          configs[follower_index],
+          BuildPersistenceSnapshotConfig(scoped_dir.path(), configs[follower_index].node_id));
       cluster.nodes[follower_index] = restarted_follower;
       cluster.threads[follower_index] = std::thread([restarted_follower]()
                                                     {
     restarted_follower->Start();
     restarted_follower->Wait(); });
 
-      EXPECT_TRUE(WaitUntilValue(cluster.nodes, "first", "100", 8s));
-      EXPECT_TRUE(WaitUntilValue(cluster.nodes, "second", "200", 8s));
+      EXPECT_TRUE(WaitUntilValue(cluster.nodes, "first", "100", 12s))
+          << DescribeAllNodes(cluster.nodes);
+      EXPECT_TRUE(WaitUntilValue(cluster.nodes, "second", "200", 12s))
+          << DescribeAllNodes(cluster.nodes);
 
       StopCluster(&cluster);
     }

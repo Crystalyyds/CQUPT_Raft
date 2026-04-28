@@ -1,1 +1,3 @@
 /build
+/raft_data
+/raft_snapshots

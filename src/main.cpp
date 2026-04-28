@@ -1,14 +1,22 @@
+#include <algorithm>
+#include <atomic>
 #include <chrono>
+#include <csignal>
+#include <cctype>
+#include <cstdlib>
 #include <filesystem>
+#include <fstream>
+#include <iostream>
+#include <map>
 #include <memory>
+#include <sstream>
+#include <stdexcept>
 #include <string>
 #include <thread>
 #include <vector>
 
-#include "raft/command.h"
 #include "raft/config.h"
 #include "raft/logging.h"
-#include "raft/propose.h"
 #include "raft/raft_node.h"
 
 namespace raftdemo
@@ -16,149 +24,238 @@ namespace raftdemo
     namespace
     {
 
-        const char *ProposeStatusName(ProposeStatus status)
+        std::atomic<bool> g_stop{false};
+
+        void HandleSignal(int)
         {
-            switch (status)
+            g_stop.store(true);
+        }
+
+        std::string Trim(std::string s)
+        {
+            auto not_space = [](unsigned char ch)
+            { return !std::isspace(ch); };
+            s.erase(s.begin(), std::find_if(s.begin(), s.end(), not_space));
+            s.erase(std::find_if(s.rbegin(), s.rend(), not_space).base(), s.end());
+            return s;
+        }
+
+        bool ParseBool(const std::string &value)
+        {
+            const std::string v = Trim(value);
+            return v == "1" || v == "true" || v == "TRUE" || v == "yes" || v == "YES" || v == "on";
+        }
+
+        std::map<std::string, std::string> LoadKeyValueConfig(const std::filesystem::path &path)
+        {
+            std::ifstream in(path);
+            if (!in)
             {
-            case ProposeStatus::kOk:
-                return "Ok";
-            case ProposeStatus::kNotLeader:
-                return "NotLeader";
-            case ProposeStatus::kInvalidCommand:
-                return "InvalidCommand";
-            case ProposeStatus::kNodeStopping:
-                return "NodeStopping";
-            case ProposeStatus::kReplicationFailed:
-                return "ReplicationFailed";
-            case ProposeStatus::kCommitFailed:
-                return "CommitFailed";
-            case ProposeStatus::kApplyFailed:
-                return "ApplyFailed";
-            case ProposeStatus::kTimeout:
-                return "Timeout";
+                throw std::runtime_error("failed to open config file: " + path.string());
             }
-            return "Unknown";
-        }
 
-        void PrintClusterSnapshot(const std::string &title,
-                                  const std::vector<std::shared_ptr<RaftNode>> &nodes)
-        {
-            Log("main", title);
-            for (const auto &node : nodes)
+            std::map<std::string, std::string> kv;
+            std::string line;
+            while (std::getline(in, line))
             {
-                Log("main", node->Describe());
-            }
-        }
-
-        bool IsLeaderNode(const std::shared_ptr<RaftNode> &node)
-        {
-            return node->Describe().find("role=Leader") != std::string::npos;
-        }
-
-        std::shared_ptr<RaftNode> WaitForLeader(
-            const std::vector<std::shared_ptr<RaftNode>> &nodes,
-            std::chrono::milliseconds timeout)
-        {
-            const auto deadline = std::chrono::steady_clock::now() + timeout;
-            while (std::chrono::steady_clock::now() < deadline)
-            {
-                for (const auto &node : nodes)
+                const auto comment_pos = line.find('#');
+                if (comment_pos != std::string::npos)
                 {
-                    if (IsLeaderNode(node))
-                    {
-                        return node;
-                    }
+                    line = line.substr(0, comment_pos);
                 }
-                std::this_thread::sleep_for(std::chrono::milliseconds(100));
+
+                line = Trim(line);
+                if (line.empty())
+                {
+                    continue;
+                }
+
+                const auto eq = line.find('=');
+                if (eq == std::string::npos)
+                {
+                    throw std::runtime_error("bad config line, expected key=value: " + line);
+                }
+
+                const std::string key = Trim(line.substr(0, eq));
+                const std::string value = Trim(line.substr(eq + 1));
+                if (key.empty())
+                {
+                    throw std::runtime_error("bad config line, empty key");
+                }
+                kv[key] = value;
             }
-            return nullptr;
+            return kv;
         }
 
-        std::vector<NodeConfig> BuildThreeNodeConfigs(const std::filesystem::path &data_root,
-                                                      int base_port)
+        int GetInt(const std::map<std::string, std::string> &kv,
+                   const std::string &key,
+                   int default_value)
         {
-            NodeConfig n1;
-            n1.node_id = 1;
-            n1.address = "127.0.0.1:" + std::to_string(base_port + 1);
-            n1.peers = {
-                PeerConfig{2, "127.0.0.1:" + std::to_string(base_port + 2)},
-                PeerConfig{3, "127.0.0.1:" + std::to_string(base_port + 3)},
-            };
-            n1.election_timeout_min = std::chrono::milliseconds(300);
-            n1.election_timeout_max = std::chrono::milliseconds(600);
-            n1.heartbeat_interval = std::chrono::milliseconds(100);
-            n1.rpc_deadline = std::chrono::milliseconds(500);
-            n1.data_dir = (data_root / "demo_node_1").string();
-
-            NodeConfig n2;
-            n2.node_id = 2;
-            n2.address = "127.0.0.1:" + std::to_string(base_port + 2);
-            n2.peers = {
-                PeerConfig{1, "127.0.0.1:" + std::to_string(base_port + 1)},
-                PeerConfig{3, "127.0.0.1:" + std::to_string(base_port + 3)},
-            };
-            n2.election_timeout_min = std::chrono::milliseconds(300);
-            n2.election_timeout_max = std::chrono::milliseconds(600);
-            n2.heartbeat_interval = std::chrono::milliseconds(100);
-            n2.rpc_deadline = std::chrono::milliseconds(500);
-            n2.data_dir = (data_root / "demo_node_2").string();
-
-            NodeConfig n3;
-            n3.node_id = 3;
-            n3.address = "127.0.0.1:" + std::to_string(base_port + 3);
-            n3.peers = {
-                PeerConfig{1, "127.0.0.1:" + std::to_string(base_port + 1)},
-                PeerConfig{2, "127.0.0.1:" + std::to_string(base_port + 2)},
-            };
-            n3.election_timeout_min = std::chrono::milliseconds(300);
-            n3.election_timeout_max = std::chrono::milliseconds(600);
-            n3.heartbeat_interval = std::chrono::milliseconds(100);
-            n3.rpc_deadline = std::chrono::milliseconds(500);
-            n3.data_dir = (data_root / "demo_node_3").string();
-
-            return {n1, n2, n3};
+            auto it = kv.find(key);
+            if (it == kv.end())
+            {
+                return default_value;
+            }
+            return std::stoi(it->second);
         }
 
-        std::vector<snapshotConfig> BuildThreeSnapshotConfigs(const std::filesystem::path &snapshot_root)
+        std::string GetString(const std::map<std::string, std::string> &kv,
+                              const std::string &key,
+                              const std::string &default_value)
         {
-            snapshotConfig s1;
-            s1.enabled = true;
-            s1.snapshot_dir = (snapshot_root / "demo_node_1").string();
-            s1.log_threshold = 20;
-            s1.snapshot_interval = std::chrono::minutes(10);
-            s1.max_snapshot_count = 5;
-            s1.load_on_startup = true;
-            s1.file_prefix = "snapshot";
-
-            snapshotConfig s2 = s1;
-            s2.snapshot_dir = (snapshot_root / "demo_node_2").string();
-
-            snapshotConfig s3 = s1;
-            s3.snapshot_dir = (snapshot_root / "demo_node_3").string();
-
-            return {s1, s2, s3};
+            auto it = kv.find(key);
+            if (it == kv.end())
+            {
+                return default_value;
+            }
+            return it->second;
         }
 
-        bool ProposeAndWait(const std::shared_ptr<RaftNode> &leader,
-                            const Command &cmd,
-                            const std::vector<std::shared_ptr<RaftNode>> &nodes,
-                            const std::string &command_desc,
-                            const std::string &snapshot_title)
+        bool GetBool(const std::map<std::string, std::string> &kv,
+                     const std::string &key,
+                     bool default_value)
         {
-            Log("main", "send command to leader: ", command_desc);
+            auto it = kv.find(key);
+            if (it == kv.end())
+            {
+                return default_value;
+            }
+            return ParseBool(it->second);
+        }
 
-            const ProposeResult result = leader->Propose(cmd);
+        std::map<int, std::string> LoadMembers(const std::map<std::string, std::string> &kv)
+        {
+            std::map<int, std::string> members;
+            constexpr const char *prefix = "node.";
 
-            Log("main",
-                "propose result: status=", ProposeStatusName(result.status),
-                ", leader_id=", result.leader_id,
-                ", term=", result.term,
-                ", log_index=", result.log_index,
-                ", message=", result.message);
+            for (const auto &[key, value] : kv)
+            {
+                if (key.rfind(prefix, 0) != 0)
+                {
+                    continue;
+                }
 
-            std::this_thread::sleep_for(std::chrono::milliseconds(800));
-            PrintClusterSnapshot(snapshot_title, nodes);
-            return result.Ok();
+                const std::string id_part = key.substr(std::string(prefix).size());
+                if (id_part.empty())
+                {
+                    continue;
+                }
+
+                const int node_id = std::stoi(id_part);
+                if (node_id <= 0)
+                {
+                    throw std::runtime_error("node id must be positive: " + key);
+                }
+
+                members[node_id] = value;
+            }
+
+            if (members.empty())
+            {
+                throw std::runtime_error("config must contain at least one node.<id>=<host:port> entry");
+            }
+
+            return members;
+        }
+
+        NodeConfig BuildNodeConfig(const std::map<std::string, std::string> &kv,
+                                   int override_node_id,
+                                   const std::filesystem::path &config_path)
+        {
+            const auto members = LoadMembers(kv);
+            const int node_id = override_node_id > 0 ? override_node_id : GetInt(kv, "node_id", 1);
+
+            auto self = members.find(node_id);
+            if (self == members.end())
+            {
+                std::ostringstream oss;
+                oss << "node_id=" << node_id << " is not present in config members";
+                throw std::runtime_error(oss.str());
+            }
+
+            NodeConfig config;
+            config.node_id = node_id;
+            config.address = self->second;
+
+            for (const auto &[peer_id, address] : members)
+            {
+                if (peer_id == node_id)
+                {
+                    continue;
+                }
+                config.peers.push_back(PeerConfig{peer_id, address});
+            }
+
+            config.election_timeout_min =
+                std::chrono::milliseconds(GetInt(kv, "election_timeout_min_ms", 800));
+            config.election_timeout_max =
+                std::chrono::milliseconds(GetInt(kv, "election_timeout_max_ms", 1600));
+            config.heartbeat_interval =
+                std::chrono::milliseconds(GetInt(kv, "heartbeat_interval_ms", 150));
+            config.rpc_deadline =
+                std::chrono::milliseconds(GetInt(kv, "rpc_deadline_ms", 500));
+
+            const std::filesystem::path config_dir =
+                config_path.has_parent_path() ? config_path.parent_path() : std::filesystem::current_path();
+
+            const std::filesystem::path data_root =
+                GetString(kv, "data_root", (config_dir / "raft_data").string());
+
+            config.data_dir = (data_root / ("node_" + std::to_string(node_id))).string();
+            return config;
+        }
+
+        snapshotConfig BuildSnapshotConfig(const std::map<std::string, std::string> &kv,
+                                           int node_id,
+                                           const std::filesystem::path &config_path)
+        {
+            const std::filesystem::path config_dir =
+                config_path.has_parent_path() ? config_path.parent_path() : std::filesystem::current_path();
+
+            const std::filesystem::path snapshot_root =
+                GetString(kv, "snapshot_root", (config_dir / "raft_snapshots").string());
+
+            snapshotConfig config;
+            config.enabled = GetBool(kv, "snapshot_enabled", true);
+            config.snapshot_dir = (snapshot_root / ("node_" + std::to_string(node_id))).string();
+            config.log_threshold = static_cast<std::uint64_t>(GetInt(kv, "snapshot_log_threshold", 30));
+            config.snapshot_interval =
+                std::chrono::milliseconds(GetInt(kv, "snapshot_interval_ms", 600000));
+            config.max_snapshot_count =
+                static_cast<std::size_t>(GetInt(kv, "snapshot_max_count", 5));
+            config.load_on_startup = GetBool(kv, "snapshot_load_on_startup", true);
+            config.file_prefix = GetString(kv, "snapshot_file_prefix", "snapshot");
+            return config;
+        }
+
+        void PrintConfigSummary(const std::filesystem::path &config_path,
+                                const NodeConfig &node_config,
+                                const snapshotConfig &snapshot_config)
+        {
+            Log("raft-node-main", "config=", config_path.string());
+            Log("raft-node-main", "node_id=", node_config.node_id);
+            Log("raft-node-main", "address=", node_config.address);
+            Log("raft-node-main", "known_peers=", node_config.peers.size(),
+                " (addresses only; this process starts node_id=", node_config.node_id, ")");
+
+            for (const auto &peer : node_config.peers)
+            {
+                Log("raft-node-main", "remote peer.", peer.node_id, "=", peer.address);
+            }
+
+            Log("raft-node-main", "cluster_size=", node_config.peers.size() + 1,
+                ", quorum=", ((node_config.peers.size() + 1) / 2 + 1));
+
+            if (node_config.peers.empty())
+            {
+                Log("raft-node-main",
+                    "single-node mode: this node can elect itself as leader; "
+                    "use node.2/node.3 entries for a 3-node cluster");
+            }
+
+            Log("raft-node-main", "data_dir=", node_config.data_dir);
+            Log("raft-node-main", "snapshot_enabled=", snapshot_config.enabled ? "true" : "false");
+            Log("raft-node-main", "snapshot_dir=", snapshot_config.snapshot_dir);
         }
 
     } // namespace
@@ -168,154 +265,51 @@ int main(int argc, char **argv)
 {
     using namespace raftdemo;
 
-    std::filesystem::path snapshot_root = "./raft_snapshots";
-    std::filesystem::path data_root = "./raft_data";
-    int base_port = 50050;
-
-    if (argc >= 2)
+    try
     {
-        snapshot_root = argv[1];
-    }
-    if (argc >= 3)
-    {
-        data_root = argv[2];
-    }
-    if (argc >= 4)
-    {
-        base_port = std::stoi(argv[3]);
-    }
+        std::signal(SIGINT, HandleSignal);
+        std::signal(SIGTERM, HandleSignal);
 
-    Log("main", "cwd=", std::filesystem::current_path().string());
-    Log("main", "snapshot_root=", snapshot_root.string());
-    Log("main", "data_root=", data_root.string());
-    Log("main", "base_port=", base_port);
+        std::filesystem::path config_path = "config.txt";
+        int node_id_override = -1;
 
-    std::error_code ec;
-    std::filesystem::create_directories(snapshot_root, ec);
-    std::filesystem::create_directories(data_root, ec);
-
-    const auto configs = BuildThreeNodeConfigs(data_root, base_port);
-    const auto snapshot_configs = BuildThreeSnapshotConfigs(snapshot_root);
-
-    std::vector<std::shared_ptr<RaftNode>> nodes;
-    nodes.reserve(configs.size());
-    for (std::size_t i = 0; i < configs.size(); ++i)
-    {
-        nodes.push_back(std::make_shared<RaftNode>(configs[i], snapshot_configs[i]));
-    }
-
-    std::vector<std::thread> threads;
-    threads.reserve(nodes.size());
-    for (const auto &node : nodes)
-    {
-        threads.emplace_back([node]()
-                             {
-            node->Start();
-            node->Wait(); });
-    }
-
-    auto leader = WaitForLeader(nodes, std::chrono::milliseconds(5000));
-    if (!leader)
-    {
-        Log("main", "failed to find leader within timeout");
-        Log("main", "stop all nodes");
-
-        for (auto &node : nodes)
+        if (argc >= 2)
         {
-            node->Stop();
+            config_path = argv[1];
         }
-        for (auto &t : threads)
+
+        if (argc >= 3)
         {
-            if (t.joinable())
-            {
-                t.join();
-            }
+            node_id_override = std::stoi(argv[2]);
         }
+
+        const auto kv = LoadKeyValueConfig(config_path);
+        NodeConfig node_config = BuildNodeConfig(kv, node_id_override, config_path);
+        snapshotConfig snapshot_config =
+            BuildSnapshotConfig(kv, node_config.node_id, config_path);
+
+        PrintConfigSummary(config_path, node_config, snapshot_config);
+
+        auto node = std::make_shared<RaftNode>(node_config, snapshot_config);
+        node->Start();
+
+        const auto print_interval =
+            std::chrono::milliseconds(GetInt(kv, "describe_interval_ms", 5000));
+
+        while (!g_stop.load())
+        {
+            std::this_thread::sleep_for(print_interval);
+            Log("raft-node-main", node->Describe());
+        }
+
+        Log("raft-node-main", "stopping node");
+        node->Stop();
+        Log("raft-node-main", "node stopped");
+        return 0;
+    }
+    catch (const std::exception &ex)
+    {
+        Log("raft-node-main", "fatal: ", ex.what());
         return 1;
     }
-
-    PrintClusterSnapshot("cluster snapshot before propose:", nodes);
-
-    bool ok = true;
-
-    {
-        Command cmd;
-        cmd.type = CommandType::kSet;
-        cmd.key = "x";
-        cmd.value = "1";
-        ok = ok && ProposeAndWait(leader, cmd, nodes,
-                                  "SET x 1",
-                                  "cluster snapshot after SET x 1:");
-    }
-
-    {
-        Command cmd;
-        cmd.type = CommandType::kSet;
-        cmd.key = "y";
-        cmd.value = "2";
-        ok = ok && ProposeAndWait(leader, cmd, nodes,
-                                  "SET y 2",
-                                  "cluster snapshot after SET y 2:");
-    }
-
-    {
-        Command cmd;
-        cmd.type = CommandType::kSet;
-        cmd.key = "x";
-        cmd.value = "100";
-        ok = ok && ProposeAndWait(leader, cmd, nodes,
-                                  "SET x 100",
-                                  "cluster snapshot after SET x 100:");
-    }
-
-    {
-        Command cmd;
-        cmd.type = CommandType::kDelete;
-        cmd.key = "y";
-        ok = ok && ProposeAndWait(leader, cmd, nodes,
-                                  "DEL y",
-                                  "cluster snapshot after DEL y:");
-    }
-
-    {
-        Command cmd;
-        cmd.type = CommandType::kSet;
-        cmd.key = "z";
-        cmd.value = "999";
-        ok = ok && ProposeAndWait(leader, cmd, nodes,
-                                  "SET z 999",
-                                  "cluster snapshot after SET z 999:");
-    }
-
-    for (int i = 0; i < 25; ++i)
-    {
-        Command cmd;
-        cmd.type = CommandType::kSet;
-        cmd.key = "k" + std::to_string(i);
-        cmd.value = "v" + std::to_string(i);
-
-        ok = ok && ProposeAndWait(
-                       leader, cmd, nodes,
-                       "SET k" + std::to_string(i) + " v" + std::to_string(i),
-                       "cluster snapshot after bulk write:");
-    }
-
-    std::this_thread::sleep_for(std::chrono::seconds(2));
-    PrintClusterSnapshot("cluster snapshot before stop:", nodes);
-
-    Log("main", "stop all nodes");
-    for (auto &node : nodes)
-    {
-        node->Stop();
-    }
-    for (auto &t : threads)
-    {
-        if (t.joinable())
-        {
-            t.join();
-        }
-    }
-
-    Log("main", ok ? "demo finished successfully" : "demo finished with failures");
-    return ok ? 0 : 2;
 }

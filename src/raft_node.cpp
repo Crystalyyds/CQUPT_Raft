@@ -97,13 +97,14 @@ namespace raftdemo
     {
       current_term_ = persistent_state.current_term;
       voted_for_ = persistent_state.voted_for;
-      // Persisted commit/apply boundaries tell us how far the log had been
-      // committed before the restart. The in-memory state machine is new, so do
-      // not trust persisted last_applied as an already-restored apply boundary.
-      // If a snapshot is loaded below, it will advance last_applied_ to the
-      // snapshot index; otherwise committed entries are replayed from index 1.
+      // Persisted commit/apply boundaries tell us how far the log was known to
+      // be committed before restart. The state machine itself is rebuilt from
+      // snapshot + committed log replay, so do NOT restore runtime last_applied_
+      // to persistent_state.last_applied here. If we did, startup would think
+      // those entries were already applied and would skip replay, leaving an
+      // empty KV state after a pure-log restart.
       commit_index_ = std::max<std::uint64_t>(persistent_state.commit_index,
-                                              persistent_state.last_applied);
+                                             persistent_state.last_applied);
       last_applied_ = 0;
       log_ = std::move(persistent_state.log);
       if (log_.empty())
@@ -120,7 +121,8 @@ namespace raftdemo
           ", term=", current_term_, ", voted_for=", voted_for_,
           ", last_log_index=", LastLogIndexLocked(),
           ", commit_index=", commit_index_,
-          ", persisted_last_applied=", persistent_state.last_applied);
+          ", persisted_last_applied=", persistent_state.last_applied,
+          ", replay_from=", last_applied_ + 1);
     }
     else
     {
@@ -170,6 +172,8 @@ namespace raftdemo
     }
 
     Log(NodeTag(config_.node_id), "started at ", config_.address, ", peers=", config_.peers.size(),
+        ", cluster_size=", config_.peers.size() + 1,
+        ", quorum=", ((config_.peers.size() + 1) / 2 + 1),
         ", data_dir=", config_.data_dir, ", snapshot_dir=", snapshot_config_.snapshot_dir);
   }
 
@@ -183,11 +187,7 @@ namespace raftdemo
 
     {
       std::lock_guard<std::mutex> lk(mu_);
-      if (election_timer_id_)
-      {
-        scheduler_.Cancel(*election_timer_id_);
-        election_timer_id_.reset();
-      }
+      CancelElectionTimerLocked();
       if (heartbeat_timer_id_)
       {
         scheduler_.Cancel(*heartbeat_timer_id_);
@@ -257,19 +257,20 @@ namespace raftdemo
     }
   }
 
-  Replicator *RaftNode::GetOrCreateReplicatorLocked(const PeerConfig &peer)
-  {
-    auto it = replicators_.find(peer.node_id);
-    if (it != replicators_.end())
-    {
-      return it->second.get();
-    }
 
-    auto replicator = std::make_unique<Replicator>(*this, peer);
-    Replicator *raw = replicator.get();
-    replicators_.emplace(peer.node_id, std::move(replicator));
-    return raw;
+Replicator *RaftNode::GetOrCreateReplicatorLocked(const PeerConfig &peer)
+{
+  auto it = replicators_.find(peer.node_id);
+  if (it != replicators_.end())
+  {
+    return it->second.get();
   }
+
+  auto replicator = std::make_unique<Replicator>(*this, peer);
+  Replicator *raw = replicator.get();
+  replicators_.emplace(peer.node_id, std::move(replicator));
+  return raw;
+}
 
   std::string RaftNode::Describe() const
   {
@@ -304,20 +305,37 @@ namespace raftdemo
     return kv_sm->Get(key, value);
   }
 
-  void RaftNode::ResetElectionTimerLocked()
+  void RaftNode::CancelElectionTimerLocked()
   {
+    // Cancel() may race with a callback which has already been dequeued by the
+    // scheduler. The generation check makes such old callbacks harmless.
+    ++election_timer_generation_;
+
     if (election_timer_id_)
     {
       scheduler_.Cancel(*election_timer_id_);
       election_timer_id_.reset();
     }
+  }
+
+  void RaftNode::ResetElectionTimerLocked()
+  {
+    CancelElectionTimerLocked();
+
+    // Leaders send heartbeats; they do not wait for heartbeats from others.
+    // Therefore a leader must not keep an election timer running.
+    if (!running_.load() || role_ == Role::kLeader)
+    {
+      return;
+    }
 
     const auto timeout = RandomElectionTimeoutLocked();
+    const auto timer_generation = election_timer_generation_;
     auto weak = weak_from_this();
-    election_timer_id_ = scheduler_.ScheduleAfter(timeout, [weak]
+    election_timer_id_ = scheduler_.ScheduleAfter(timeout, [weak, timer_generation]
                                                   {
     if (auto self = weak.lock()) {
-      self->OnElectionTimeout();
+      self->OnElectionTimeout(timer_generation);
     } });
   }
 
@@ -377,19 +395,29 @@ namespace raftdemo
     return std::chrono::milliseconds(dist(rng_));
   }
 
-  void RaftNode::OnElectionTimeout()
+  void RaftNode::OnElectionTimeout(std::uint64_t timer_generation)
   {
-    if (!running_.load())
-    {
-      return;
-    }
-
     {
       std::lock_guard<std::mutex> lk(mu_);
+
+      if (!running_.load())
+      {
+        return;
+      }
+
+      // Ignore callbacks from stale election timers. This prevents an old timer
+      // from starting a new election after this node has already become leader.
+      if (timer_generation != election_timer_generation_)
+      {
+        return;
+      }
+
       if (role_ == Role::kLeader)
       {
         return;
       }
+
+      election_timer_id_.reset();
     }
 
     StartElection();
@@ -549,31 +577,31 @@ namespace raftdemo
     }
   }
 
-  void RaftNode::SendHeartbeats()
+void RaftNode::SendHeartbeats()
+{
+  std::vector<PeerConfig> peers;
+  std::uint64_t term = 0;
+
   {
-    std::vector<PeerConfig> peers;
-    std::uint64_t term = 0;
-
+    std::lock_guard<std::mutex> lk(mu_);
+    if (!running_.load() || role_ != Role::kLeader)
     {
-      std::lock_guard<std::mutex> lk(mu_);
-      if (!running_.load() || role_ != Role::kLeader)
-      {
-        return;
-      }
-      peers = config_.peers;
-      term = current_term_;
-
-      for (const auto &peer : peers)
-      {
-        GetOrCreateReplicatorLocked(peer);
-      }
+      return;
     }
+    peers = config_.peers;
+    term = current_term_;
 
-    auto weak = weak_from_this();
     for (const auto &peer : peers)
     {
-      rpc_pool_.Submit([weak, peer, term]
-                       {
+      GetOrCreateReplicatorLocked(peer);
+    }
+  }
+
+  auto weak = weak_from_this();
+  for (const auto &peer : peers)
+  {
+    rpc_pool_.Submit([weak, peer, term]
+                     {
     auto self = weak.lock();
     if (!self || !self->running_.load()) {
       return;
@@ -601,8 +629,8 @@ namespace raftdemo
             result.message);
       }
     } });
-    }
   }
+}
 
   bool RaftNode::BecomeFollowerLocked(std::uint64_t new_term, int new_leader,
                                       const std::string &reason)
@@ -654,11 +682,7 @@ namespace raftdemo
     role_ = Role::kLeader;
     leader_id_ = config_.node_id;
 
-    if (election_timer_id_)
-    {
-      scheduler_.Cancel(*election_timer_id_);
-      election_timer_id_.reset();
-    }
+    CancelElectionTimerLocked();
 
     const auto last_log_index = LastLogIndexLocked();
     next_index_.clear();
@@ -1361,43 +1385,12 @@ namespace raftdemo
       result.message = "log appended locally";
     }
 
-    // 锁外复制，避免长时间阻塞 Raft 核心状态。
-    // 少数派 leader 不能提交日志；这里返回 timeout/unknown，避免客户端
-    // 把“没有在本轮调用拿到多数派”误解为一个确定的业务失败。
-    const ReplicationResult replicated = ReplicateLogEntryToMajority(log_index);
-    if (replicated != ReplicationResult::kReplicated)
+    // 锁外复制，避免长时间阻塞 Raft 核心状态
+    const bool replicated = ReplicateLogEntryToMajority(log_index);
+    if (!replicated)
     {
-      bool still_running = false;
-      int known_leader = -1;
-      std::uint64_t observed_term = term;
-      {
-        std::lock_guard<std::mutex> lk(mu_);
-        still_running = running_.load();
-        known_leader = leader_id_;
-        observed_term = current_term_;
-      }
-
-      result.leader_id = known_leader;
-      result.term = observed_term;
-      switch (replicated)
-      {
-      case ReplicationResult::kNoLongerLeader:
-        result.status = still_running ? ProposeStatus::kNotLeader : ProposeStatus::kNodeStopping;
-        result.message = still_running
-                             ? "lost leadership before log reached majority"
-                             : "node stopped before log reached majority";
-        break;
-      case ReplicationResult::kTimeout:
-        result.status = ProposeStatus::kTimeout;
-        result.message = "timed out waiting for majority replication; commit result is unknown";
-        break;
-      case ReplicationResult::kLogUnavailable:
-        result.status = ProposeStatus::kReplicationFailed;
-        result.message = "log entry became unavailable before majority replication";
-        break;
-      case ReplicationResult::kReplicated:
-        break;
-      }
+      result.status = ProposeStatus::kReplicationFailed;
+      result.message = "failed to replicate log entry to majority";
       return result;
     }
 
@@ -1484,47 +1477,105 @@ namespace raftdemo
     return new_index;
   }
 
-  RaftNode::ReplicationResult RaftNode::ReplicateLogEntryToMajority(std::uint64_t log_index)
+bool RaftNode::ReplicateLogEntryToMajority(std::uint64_t log_index)
+{
+  const auto deadline = std::chrono::steady_clock::now() + config_.rpc_deadline * 20;
+
+  while (std::chrono::steady_clock::now() < deadline)
   {
-    const auto deadline = std::chrono::steady_clock::now() + config_.rpc_deadline * 20;
-
-    while (std::chrono::steady_clock::now() < deadline)
+    std::vector<PeerConfig> peers;
+    std::uint64_t term = 0;
     {
-      std::vector<PeerConfig> peers;
-      std::uint64_t term = 0;
+      std::lock_guard<std::mutex> lk(mu_);
+      if (!running_.load() || role_ != Role::kLeader)
+      {
+        return false;
+      }
+      if (!HasLogAtIndexLocked(log_index))
+      {
+        return log_index <= last_snapshot_index_;
+      }
+      peers = config_.peers;
+      term = current_term_;
+
+      for (const auto &peer : peers)
+      {
+        GetOrCreateReplicatorLocked(peer);
+      }
+    }
+
+    const std::size_t total_nodes = peers.size() + 1;
+    const std::size_t majority = total_nodes / 2 + 1;
+    if (majority <= 1)
+    {
+      return true;
+    }
+
+    {
+      std::lock_guard<std::mutex> lk(mu_);
+      std::size_t replicated_count = 1;
+      for (const auto &peer : peers)
+      {
+        const auto it = match_index_.find(peer.node_id);
+        if (it != match_index_.end() && it->second >= log_index)
+        {
+          ++replicated_count;
+        }
+      }
+      if (replicated_count >= majority)
+      {
+        return true;
+      }
+    }
+
+    for (const auto &peer : peers)
+    {
+      Replicator *replicator = nullptr;
       {
         std::lock_guard<std::mutex> lk(mu_);
-        if (!running_.load() || role_ != Role::kLeader)
+        if (!running_.load() || role_ != Role::kLeader || current_term_ != term)
         {
-          return ReplicationResult::kNoLongerLeader;
+          return false;
         }
-        if (!HasLogAtIndexLocked(log_index))
+        const auto it = match_index_.find(peer.node_id);
+        if (it != match_index_.end() && it->second >= log_index)
         {
-          return log_index <= last_snapshot_index_ ? ReplicationResult::kReplicated
-                                                   : ReplicationResult::kLogUnavailable;
+          continue;
         }
-        peers = config_.peers;
-        term = current_term_;
+        replicator = GetOrCreateReplicatorLocked(peer);
+      }
 
-        for (const auto &peer : peers)
+      bool should_apply = false;
+      if (replicator != nullptr)
+      {
+        replicator->ReplicateOnce(term, log_index, &should_apply);
+      }
+
+      if (should_apply)
+      {
+        ApplyResult result = ApplyCommittedEntries();
+        if (!result.Ok)
         {
-          GetOrCreateReplicatorLocked(peer);
+          Log(NodeTag(config_.node_id),
+              "apply committed entries failed after replication, reason=",
+              result.message);
         }
       }
 
-      const std::size_t total_nodes = peers.size() + 1;
-      const std::size_t majority = total_nodes / 2 + 1;
-      if (majority <= 1)
-      {
-        return ReplicationResult::kReplicated;
-      }
-
       {
         std::lock_guard<std::mutex> lk(mu_);
+        if (!running_.load())
+        {
+          return false;
+        }
+        if (role_ != Role::kLeader || current_term_ != term)
+        {
+          return false;
+        }
         std::size_t replicated_count = 1;
-        for (const auto &peer : peers)
+        for (const auto &candidate : peers)
         {
-          const auto it = match_index_.find(peer.node_id);
+          const auto it = match_index_.find(candidate.node_id);
           if (it != match_index_.end() && it->second >= log_index)
           {
             ++replicated_count;
@@ -1532,75 +1583,16 @@ namespace raftdemo
         }
         if (replicated_count >= majority)
         {
-          return ReplicationResult::kReplicated;
+          return true;
         }
       }
-
-      for (const auto &peer : peers)
-      {
-        Replicator *replicator = nullptr;
-        {
-          std::lock_guard<std::mutex> lk(mu_);
-          if (!running_.load() || role_ != Role::kLeader || current_term_ != term)
-          {
-            return ReplicationResult::kNoLongerLeader;
-          }
-          const auto it = match_index_.find(peer.node_id);
-          if (it != match_index_.end() && it->second >= log_index)
-          {
-            continue;
-          }
-          replicator = GetOrCreateReplicatorLocked(peer);
-        }
-
-        bool should_apply = false;
-        if (replicator != nullptr)
-        {
-          replicator->ReplicateOnce(term, log_index, &should_apply);
-        }
-
-        if (should_apply)
-        {
-          ApplyResult result = ApplyCommittedEntries();
-          if (!result.Ok)
-          {
-            Log(NodeTag(config_.node_id),
-                "apply committed entries failed after replication, reason=",
-                result.message);
-          }
-        }
-
-        {
-          std::lock_guard<std::mutex> lk(mu_);
-          if (!running_.load())
-          {
-            return ReplicationResult::kNoLongerLeader;
-          }
-          if (role_ != Role::kLeader || current_term_ != term)
-          {
-            return ReplicationResult::kNoLongerLeader;
-          }
-          std::size_t replicated_count = 1;
-          for (const auto &candidate : peers)
-          {
-            const auto it = match_index_.find(candidate.node_id);
-            if (it != match_index_.end() && it->second >= log_index)
-            {
-              ++replicated_count;
-            }
-          }
-          if (replicated_count >= majority)
-          {
-            return ReplicationResult::kReplicated;
-          }
-        }
-      }
-
-      std::this_thread::sleep_for(std::chrono::milliseconds(20));
     }
 
-    return ReplicationResult::kTimeout;
+    std::this_thread::sleep_for(std::chrono::milliseconds(20));
   }
+
+  return false;
+}
 
   void RaftNode::AdvanceCommitIndexUnlocked()
   {
@@ -1959,7 +1951,7 @@ namespace raftdemo
       }
     }
 
-    if (ReplicateLogEntryToMajority(log_index) != ReplicationResult::kReplicated)
+    if (!ReplicateLogEntryToMajority(log_index))
     {
       return false;
     }

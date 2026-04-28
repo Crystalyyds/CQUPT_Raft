@@ -85,12 +85,13 @@ namespace raftdemo
     void InitClients();
     Replicator *GetOrCreateReplicatorLocked(const PeerConfig &peer);
 
+    void CancelElectionTimerLocked();
     void ResetElectionTimerLocked();
     void ResetHeartbeatTimerLocked();
     void ResetSnapshotTimerLocked();
     std::chrono::milliseconds RandomElectionTimeoutLocked();
 
-    void OnElectionTimeout();
+    void OnElectionTimeout(std::uint64_t timer_generation);
     void StartElection();
     void OnElectionWon(std::uint64_t term);
     void SendHeartbeats();
@@ -120,17 +121,9 @@ namespace raftdemo
 
     static const char *RoleName(Role role);
 
-    enum class ReplicationResult
-    {
-      kReplicated,
-      kNoLongerLeader,
-      kLogUnavailable,
-      kTimeout,
-    };
-
     bool ValidateCommandUnlocked(const Command &command, std::string *reason) const;
     std::uint64_t AppendLocalLogUnlocked(const std::string &command_data);
-    ReplicationResult ReplicateLogEntryToMajority(std::uint64_t log_index);
+    bool ReplicateLogEntryToMajority(std::uint64_t log_index);
     void AdvanceCommitIndexUnlocked();
     ApplyResult ApplyCommittedEntries();
     bool PersistStateLocked(std::string *reason);
@@ -167,6 +160,7 @@ namespace raftdemo
     TimerScheduler scheduler_;
     ThreadPool rpc_pool_{4};
     std::optional<TimerScheduler::TaskId> election_timer_id_;
+    std::uint64_t election_timer_generation_{0};
     std::optional<TimerScheduler::TaskId> heartbeat_timer_id_;
     std::optional<TimerScheduler::TaskId> snapshot_timer_id_;
 
