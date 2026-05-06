@@ -70,6 +70,14 @@ namespace raftdemo
     bool DebugGetValue(const std::string &key, std::string *value) const;
 
   private:
+    enum class ReplicationOutcome
+    {
+      kReplicated,
+      kTimeout,
+      kLostLeadership,
+      kLogUnavailable,
+    };
+
     struct PeerClient
     {
       int peer_id{0};
@@ -109,8 +117,14 @@ namespace raftdemo
     std::size_t LogOffsetLocked(std::uint64_t index) const;
     const LogRecord *LogAtIndexLocked(std::uint64_t index) const;
     std::uint64_t TermAtIndexLocked(std::uint64_t index) const;
+    std::uint64_t FirstIndexOfTermLocked(std::uint64_t term) const;
     void CompactLogPrefixLocked(std::uint64_t last_included_index,
                                 std::uint64_t last_included_term);
+    void RestoreLogAfterSnapshotLocked(std::uint64_t last_included_index,
+                                       std::uint64_t last_included_term,
+                                       bool keep_suffix_when_boundary_matches);
+    void SetAppendEntriesConflictHintLocked(std::uint64_t probe_index,
+                                            raft::AppendEntriesResponse *response) const;
 
     std::optional<raft::VoteResponse> RequestVoteRpc(int peer_id, const raft::VoteRequest &request);
     std::optional<raft::AppendEntriesResponse> AppendEntriesRpc(
@@ -123,7 +137,7 @@ namespace raftdemo
 
     bool ValidateCommandUnlocked(const Command &command, std::string *reason) const;
     std::uint64_t AppendLocalLogUnlocked(const std::string &command_data);
-    bool ReplicateLogEntryToMajority(std::uint64_t log_index);
+    ReplicationOutcome ReplicateLogEntryToMajority(std::uint64_t log_index);
     void AdvanceCommitIndexUnlocked();
     ApplyResult ApplyCommittedEntries();
     bool PersistStateLocked(std::string *reason);

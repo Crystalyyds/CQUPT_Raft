@@ -6,13 +6,24 @@ ThreadPool::ThreadPool(std::size_t workers) {
   if (workers == 0) {
     workers = 1;
   }
-  workers_.reserve(workers);
-  for (std::size_t i = 0; i < workers; ++i) {
-    workers_.emplace_back(&ThreadPool::WorkerLoop, this);
-  }
+  worker_count_ = workers;
+  Start();
 }
 
 ThreadPool::~ThreadPool() { Stop(); }
+
+void ThreadPool::Start() {
+  std::lock_guard<std::mutex> lk(mu_);
+  if (!stop_) {
+    return;
+  }
+
+  stop_ = false;
+  workers_.reserve(worker_count_);
+  for (std::size_t i = 0; i < worker_count_; ++i) {
+    workers_.emplace_back(&ThreadPool::WorkerLoop, this);
+  }
+}
 
 void ThreadPool::Submit(std::function<void()> task) {
   {

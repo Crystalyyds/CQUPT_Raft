@@ -278,8 +278,40 @@ namespace raftdemo
     }
 
     auto &next_index = node_.next_index_[peer_.node_id];
-    const std::uint64_t hinted_next = SafeAddOne(response.last_log_index());
-    if (hinted_next > 0 && hinted_next < next_index)
+    std::uint64_t hinted_next = 0;
+
+    if (response.conflict_term() != 0)
+    {
+      for (auto it = node_.log_.rbegin(); it != node_.log_.rend(); ++it)
+      {
+        if (it->term == response.conflict_term())
+        {
+          hinted_next = SafeAddOne(it->index);
+          break;
+        }
+      }
+
+      if (hinted_next == 0)
+      {
+        hinted_next = response.conflict_index();
+      }
+    }
+    else if (response.conflict_index() != 0)
+    {
+      hinted_next = response.conflict_index();
+    }
+    else
+    {
+      hinted_next = SafeAddOne(response.last_log_index());
+    }
+
+    const std::uint64_t leader_last_next = SafeAddOne(node_.LastLogIndexLocked());
+    if (hinted_next > leader_last_next)
+    {
+      hinted_next = leader_last_next;
+    }
+
+    if (hinted_next > 0)
     {
       next_index = hinted_next;
     }

@@ -4,6 +4,8 @@
 #include <cstdlib>
 #include <cstdint>
 #include <filesystem>
+#include <fstream>
+#include <iterator>
 #include <memory>
 #include <optional>
 #include <random>
@@ -15,6 +17,7 @@
 #include "raft/config.h"
 #include "raft/propose.h"
 #include "raft/raft_node.h"
+#include "raft/state_machine.h"
 
 namespace raftdemo {
 namespace {
@@ -437,6 +440,146 @@ TEST(RaftSplitBrainTest, StaleCandidateVoteRequestIsRejectedEvenWithHigherTerm) 
 
   EXPECT_EQ(response.term(), *follower_term + 1);
   EXPECT_FALSE(response.vote_granted());
+}
+
+TEST(RaftSplitBrainTest, AppendEntriesRejectionIncludesFastBacktrackHint) {
+  const fs::path root = MakeTestRoot();
+  std::error_code ec;
+  fs::remove_all(root, ec);
+  fs::create_directories(root, ec);
+
+  RaftNode node(BuildSingleNodeConfig(root), DisabledSnapshotConfig(root));
+
+  raft::AppendEntriesRequest append;
+  append.set_term(2);
+  append.set_leader_id(2);
+  append.set_prev_log_index(0);
+  append.set_prev_log_term(0);
+  append.set_leader_commit(0);
+
+  auto* first = append.add_entries();
+  first->set_index(1);
+  first->set_term(1);
+  first->set_command(SetCommand("first", "value_1").Serialize());
+
+  auto* second = append.add_entries();
+  second->set_index(2);
+  second->set_term(2);
+  second->set_command(SetCommand("second", "value_2").Serialize());
+
+  raft::AppendEntriesResponse append_response;
+  node.OnAppendEntries(append, &append_response);
+  ASSERT_TRUE(append_response.success());
+  ASSERT_EQ(append_response.match_index(), 2U);
+
+  raft::AppendEntriesRequest term_mismatch;
+  term_mismatch.set_term(2);
+  term_mismatch.set_leader_id(2);
+  term_mismatch.set_prev_log_index(2);
+  term_mismatch.set_prev_log_term(99);
+  term_mismatch.set_leader_commit(0);
+
+  raft::AppendEntriesResponse mismatch_response;
+  node.OnAppendEntries(term_mismatch, &mismatch_response);
+  EXPECT_FALSE(mismatch_response.success());
+  EXPECT_EQ(mismatch_response.conflict_term(), 2U);
+  EXPECT_EQ(mismatch_response.conflict_index(), 2U);
+  EXPECT_EQ(mismatch_response.last_log_index(), 2U);
+
+  raft::AppendEntriesRequest missing_prev;
+  missing_prev.set_term(2);
+  missing_prev.set_leader_id(2);
+  missing_prev.set_prev_log_index(10);
+  missing_prev.set_prev_log_term(2);
+  missing_prev.set_leader_commit(0);
+
+  raft::AppendEntriesResponse missing_response;
+  node.OnAppendEntries(missing_prev, &missing_response);
+  EXPECT_FALSE(missing_response.success());
+  EXPECT_EQ(missing_response.conflict_term(), 0U);
+  EXPECT_EQ(missing_response.conflict_index(), 3U);
+  EXPECT_EQ(missing_response.last_log_index(), 2U);
+}
+
+TEST(RaftSplitBrainTest, InstallSnapshotDiscardsSuffixWhenBoundaryTermDiffers) {
+  const fs::path root = MakeTestRoot();
+  std::error_code ec;
+  fs::remove_all(root, ec);
+  fs::create_directories(root, ec);
+
+  snapshotConfig snapshot_config;
+  snapshot_config.enabled = true;
+  snapshot_config.snapshot_dir = (root / "raft_snapshots").string();
+  snapshot_config.load_on_startup = true;
+
+  RaftNode node(BuildSingleNodeConfig(root), snapshot_config);
+
+  raft::AppendEntriesRequest append;
+  append.set_term(2);
+  append.set_leader_id(2);
+  append.set_prev_log_index(0);
+  append.set_prev_log_term(0);
+  append.set_leader_commit(0);
+
+  auto* first = append.add_entries();
+  first->set_index(1);
+  first->set_term(1);
+  first->set_command(SetCommand("before_snapshot", "kept_in_snapshot").Serialize());
+
+  auto* divergent = append.add_entries();
+  divergent->set_index(2);
+  divergent->set_term(2);
+  divergent->set_command(SetCommand("divergent_suffix", "must_be_discarded").Serialize());
+
+  raft::AppendEntriesResponse append_response;
+  node.OnAppendEntries(append, &append_response);
+  ASSERT_TRUE(append_response.success());
+  ASSERT_TRUE(Contains(node.Describe(), "last_log_index=2")) << node.Describe();
+
+  KvStateMachine snapshot_state;
+  ASSERT_TRUE(snapshot_state.Apply(
+      1, SetCommand("before_snapshot", "kept_in_snapshot").Serialize()).Ok);
+
+  const fs::path snapshot_file = root / "snapshot_payload.bin";
+  const SnapshotResult save_snapshot = snapshot_state.SaveSnapshot(snapshot_file.string());
+  ASSERT_TRUE(save_snapshot.Ok()) << save_snapshot.message;
+
+  std::ifstream in(snapshot_file, std::ios::binary);
+  ASSERT_TRUE(in.is_open()) << snapshot_file;
+  std::string snapshot_data((std::istreambuf_iterator<char>(in)),
+                            std::istreambuf_iterator<char>());
+
+  raft::InstallSnapshotRequest install;
+  install.set_term(3);
+  install.set_leader_id(2);
+  install.set_last_included_index(1);
+  install.set_last_included_term(9);
+  install.set_snapshot_data(snapshot_data);
+
+  raft::InstallSnapshotResponse install_response;
+  node.OnInstallSnapshot(install, &install_response);
+  ASSERT_TRUE(install_response.success()) << install_response.message();
+
+  const std::string after_install = node.Describe();
+  EXPECT_TRUE(Contains(after_install, "last_snapshot_index=1")) << after_install;
+  EXPECT_TRUE(Contains(after_install, "last_log_index=1")) << after_install;
+
+  raft::AppendEntriesRequest replacement;
+  replacement.set_term(3);
+  replacement.set_leader_id(2);
+  replacement.set_prev_log_index(1);
+  replacement.set_prev_log_term(9);
+  replacement.set_leader_commit(1);
+
+  auto* replacement_entry = replacement.add_entries();
+  replacement_entry->set_index(2);
+  replacement_entry->set_term(3);
+  replacement_entry->set_command(SetCommand("replacement_suffix", "accepted").Serialize());
+
+  raft::AppendEntriesResponse replacement_response;
+  node.OnAppendEntries(replacement, &replacement_response);
+  EXPECT_TRUE(replacement_response.success());
+  EXPECT_EQ(replacement_response.match_index(), 2U);
 }
 
 }  // namespace

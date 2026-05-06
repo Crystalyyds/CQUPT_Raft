@@ -43,6 +43,14 @@ message AppendEntriesResponse {
   // Follower's current last log index. Leader uses this hint to jump next_index
   // back quickly when the follower is far behind instead of decreasing one by one.
   uint64 last_log_index = 4;
+
+  // Fast log backtracking hint. When success=false:
+  //   conflict_term == 0 means the follower is missing prev_log_index, and
+  //   conflict_index is the first index the leader should try next.
+  //   conflict_term != 0 means the follower has a different term at prev_log_index,
+  //   and conflict_index is the first index for that conflicting term.
+  uint64 conflict_index = 5;
+  uint64 conflict_term = 6;
 }
 
 message InstallSnapshotRequest {
