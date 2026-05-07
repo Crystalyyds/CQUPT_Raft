@@ -5,7 +5,7 @@
 #include <string>
 #include <unordered_map>
 
-#include "raft/command.h"
+#include "raft/common/command.h"
 
 namespace raftdemo
 {

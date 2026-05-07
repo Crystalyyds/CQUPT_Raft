@@ -1,4 +1,4 @@
-#include "raft/command.h"
+#include "raft/common/command.h"
 
 #include <sstream>
 #include <vector>

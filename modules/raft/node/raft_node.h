@@ -17,14 +17,14 @@
 
 #include "raft.pb.h"
 #include "raft.grpc.pb.h"
-#include "raft/command.h"
-#include "raft/config.h"
-#include "raft/min_heap_timer.h"
-#include "raft/propose.h"
-#include "raft/raft_storage.h"
-#include "raft/snapshot_storage.h"
-#include "raft/state_machine.h"
-#include "raft/thread_pool.h"
+#include "raft/common/command.h"
+#include "raft/common/config.h"
+#include "raft/runtime/min_heap_timer.h"
+#include "raft/common/propose.h"
+#include "raft/storage/raft_storage.h"
+#include "raft/storage/snapshot_storage.h"
+#include "raft/state_machine/state_machine.h"
+#include "raft/runtime/thread_pool.h"
 
 namespace raftdemo
 {

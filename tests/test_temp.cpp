@@ -7,7 +7,7 @@
 #include <string>
 #include <vector>
 
-#include "raft/snapshot_storage.h"
+#include "raft/storage/snapshot_storage.h"
 
 namespace raftdemo {
 namespace {

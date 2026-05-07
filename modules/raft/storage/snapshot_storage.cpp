@@ -1,4 +1,4 @@
-#include "raft/snapshot_storage.h"
+#include "raft/storage/snapshot_storage.h"
 
 #include <algorithm>
 #include <chrono>

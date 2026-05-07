@@ -1,4 +1,4 @@
-#include "raft/replicator.h"
+#include "raft/replication/replicator.h"
 
 #include <algorithm>
 #include <chrono>
@@ -7,8 +7,8 @@
 #include <string>
 #include <utility>
 
-#include "raft/logging.h"
-#include "raft/raft_node.h"
+#include "raft/runtime/logging.h"
+#include "raft/node/raft_node.h"
 
 namespace raftdemo
 {

@@ -14,11 +14,11 @@
 #include <thread>
 #include <vector>
 
-#include "raft/command.h"
-#include "raft/config.h"
-#include "raft/propose.h"
-#include "raft/raft_node.h"
-#include "raft/raft_storage.h"
+#include "raft/common/command.h"
+#include "raft/common/config.h"
+#include "raft/common/propose.h"
+#include "raft/node/raft_node.h"
+#include "raft/storage/raft_storage.h"
 
 namespace raftdemo
 {

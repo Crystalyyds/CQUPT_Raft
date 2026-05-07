@@ -1,4 +1,4 @@
-#include "raft/state_machine.h"
+#include "raft/state_machine/state_machine.h"
 
 #include <algorithm>
 #include <cstdint>

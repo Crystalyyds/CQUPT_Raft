@@ -1,4 +1,4 @@
-#include "raft/raft_storage.h"
+#include "raft/storage/raft_storage.h"
 
 #include <algorithm>
 #include <array>
@@ -14,7 +14,7 @@
 #include <utility>
 #include <vector>
 
-#include "raft/raft_node.h"
+#include "raft/node/raft_node.h"
 
 namespace raftdemo
 {

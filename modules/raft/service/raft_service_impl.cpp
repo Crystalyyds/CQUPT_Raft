@@ -1,8 +1,8 @@
-#include "raft/raft_service_impl.h"
+#include "raft/service/raft_service_impl.h"
 
 #include <chrono>
 
-#include "raft/raft_node.h"
+#include "raft/node/raft_node.h"
 
 namespace raftdemo {
 

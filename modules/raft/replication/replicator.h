@@ -6,7 +6,7 @@
 #include <string>
 
 #include "raft.pb.h"
-#include "raft/config.h"
+#include "raft/common/config.h"
 
 namespace raftdemo
 {

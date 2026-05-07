@@ -1,4 +1,4 @@
-#include "raft/raft_node.h"
+#include "raft/node/raft_node.h"
 
 #include <algorithm>
 #include <chrono>
@@ -15,12 +15,12 @@
 #include <utility>
 #include <vector>
 
-#include "raft/logging.h"
-#include "raft/kv_service_impl.h"
-#include "raft/raft_service_impl.h"
-#include "raft/replicator.h"
-#include "raft/state_machine.h"
-#include "raft/snapshot_storage.h"
+#include "raft/runtime/logging.h"
+#include "raft/service/kv_service_impl.h"
+#include "raft/service/raft_service_impl.h"
+#include "raft/replication/replicator.h"
+#include "raft/state_machine/state_machine.h"
+#include "raft/storage/snapshot_storage.h"
 
 namespace raftdemo
 {

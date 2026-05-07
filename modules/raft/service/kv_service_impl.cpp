@@ -1,10 +1,10 @@
-#include "raft/kv_service_impl.h"
+#include "raft/service/kv_service_impl.h"
 
 #include <chrono>
 #include <utility>
 
-#include "raft/command.h"
-#include "raft/raft_node.h"
+#include "raft/common/command.h"
+#include "raft/node/raft_node.h"
 
 namespace raftdemo
 {
