@@ -245,6 +245,8 @@ namespace raftdemo
       return true;
     }
 
+    bool SyncDirectory(const std::filesystem::path &path, std::string *error);
+
     bool ReplaceFile(const std::filesystem::path &src,
                      const std::filesystem::path &dst,
                      std::string *error)
@@ -272,6 +274,12 @@ namespace raftdemo
         {
           *error = "rename file failed: " + src.string() + " -> " + dst.string() + ": " + ec.message();
         }
+        return false;
+      }
+
+      const std::filesystem::path parent_dir = dst.parent_path();
+      if (!parent_dir.empty() && !SyncDirectory(parent_dir, error))
+      {
         return false;
       }
       return true;
@@ -816,7 +824,16 @@ namespace raftdemo
           }
           return false;
         }
-        return true;
+        out.close();
+        if (!out)
+        {
+          if (error != nullptr)
+          {
+            *error = "close temp meta file failed";
+          }
+          return false;
+        }
+        return SyncFile(meta_path, error);
       }
 
       bool LoadSegments(const std::filesystem::path &log_dir,

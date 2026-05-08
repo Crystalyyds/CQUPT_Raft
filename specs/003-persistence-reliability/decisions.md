@@ -88,3 +88,39 @@ Phase 2 中 segment log durability 实现引入了 POSIX fsync 语义，但 Wind
 影响：
 
 后续 Phase 3 的 meta.bin / hard state fsync 语义也必须遵守这个规则。
+
+## D014
+
+- Decision: Phase 3A 只输出 `meta.bin` / hard state 的 affected-files plan 和测试设计，不修改业务代码
+- Status: Accepted
+- Reason: 当前目标是先把 `WriteMeta`、`ReplaceFile`、`PersistStateLocked` 的职责边界、测试场景和最小实现范围固定下来，避免在高风险 `node` / `storage` 边界上直接实现
+
+## D015
+
+- Decision: Phase 3A 的测试设计优先复用现有 `tests/test_raft_segment_storage.cpp` 与 `tests/persistence_test.cpp`
+- Status: Accepted
+- Reason: 本阶段只做计划与测试设计，不创建 task 子目录，也不预先引入新的测试 target；优先在已有 storage / persistence 测试面上扩展 `meta.bin` 与 hard state 场景
+
+## D016
+
+- Decision: Phase 3A 不扩大到 snapshot publish、segment log publish 或持久化格式修改
+- Status: Accepted
+- Reason: `meta.bin` / hard state durability 已经可以在 `WriteMeta`、`ReplaceFile`、`PersistStateLocked` 三个入口内闭合，当前没有发现必须越界到 Phase 2 或 Phase 4 的阻塞项
+
+## D017
+
+- Decision: Phase 3B 只处理 `meta.bin` / hard state 持久化语义，不处理 segment log、snapshot、KV、proto、RPC 或持久化格式变更
+- Status: Accepted
+- Reason: Phase 2 已经处理 segment log durability；Phase 3B 聚焦 hard state durability，避免一次修改跨多个持久化子系统
+
+## D018
+
+- Decision: Phase 3B 的最小实现只落在 `WriteMeta`、`ReplaceFile` 和 `PersistStateLocked`
+- Status: Accepted
+- Reason: `meta.bin` / hard state 的 durability 语义可以在这三个入口内闭合，不需要触碰 `WriteSegments`、`ReplaceDirectory`、snapshot publish 或持久化格式
+
+## D019
+
+- Decision: Phase 3B 继续复用 Phase 2 的跨平台 flush helper 约束，Windows 路径不允许出现新的 no-op success
+- Status: Accepted
+- Reason: `meta.bin` file / directory durability 与 segment log durability 共享同一跨平台 contract；如果 Phase 3B 在 Windows 路径退化为 no-op，则 hard state durability 语义会再次按平台分裂

@@ -790,6 +790,62 @@ namespace raftdemo
       EXPECT_FALSE(std::filesystem::exists(storage_root / "log.bak")) << DescribeDirectoryTree(root_);
     }
 
+    TEST_F(RaftSegmentStorageTest, SavePublishesMetaFileWithoutLeavingMetaTempFile)
+    {
+      const auto storage_root = data_root_ / "direct_storage_meta_publish";
+      auto storage = CreateFileRaftStorage(storage_root.string());
+      std::string error;
+
+      ASSERT_TRUE(storage->Save(MakeState(1, 256), &error)) << error;
+
+      EXPECT_TRUE(std::filesystem::exists(storage_root / "meta.bin")) << DescribeDirectoryTree(root_);
+      EXPECT_FALSE(std::filesystem::exists(storage_root / "meta.bin.tmp")) << DescribeDirectoryTree(root_);
+    }
+
+    TEST_F(RaftSegmentStorageTest, MissingMetaFileCausesLoadToReportNoPersistedState)
+    {
+      const auto storage_root = data_root_ / "direct_storage_missing_meta";
+      auto storage = CreateFileRaftStorage(storage_root.string());
+      std::string error;
+
+      ASSERT_TRUE(storage->Save(MakeState(1, 256), &error)) << error;
+      ASSERT_TRUE(std::filesystem::remove(storage_root / "meta.bin")) << DescribeDirectoryTree(root_);
+
+      PersistentRaftState loaded;
+      bool has_state = true;
+      ASSERT_TRUE(storage->Load(&loaded, &has_state, &error)) << error;
+      EXPECT_FALSE(has_state);
+      EXPECT_TRUE(loaded.log.empty());
+      EXPECT_EQ(loaded.current_term, 0U);
+      EXPECT_EQ(loaded.voted_for, -1);
+      EXPECT_EQ(loaded.commit_index, 0U);
+      EXPECT_EQ(loaded.last_applied, 0U);
+    }
+
+    TEST_F(RaftSegmentStorageTest, CorruptedMetaFileFailsLoad)
+    {
+      const auto storage_root = data_root_ / "direct_storage_corrupted_meta";
+      auto storage = CreateFileRaftStorage(storage_root.string());
+      std::string error;
+
+      ASSERT_TRUE(storage->Save(MakeState(1, 256), &error)) << error;
+
+      const auto meta_path = storage_root / "meta.bin";
+      {
+        std::fstream io(meta_path, std::ios::binary | std::ios::in | std::ios::out);
+        ASSERT_TRUE(io.is_open()) << meta_path.string();
+        const unsigned char bad_magic = 0x00;
+        io.write(reinterpret_cast<const char *>(&bad_magic), sizeof(bad_magic));
+        ASSERT_TRUE(static_cast<bool>(io)) << "failed to corrupt meta file";
+      }
+
+      PersistentRaftState loaded;
+      bool has_state = false;
+      ASSERT_FALSE(storage->Load(&loaded, &has_state, &error));
+      EXPECT_FALSE(has_state);
+      EXPECT_NE(error.find("invalid raft meta magic"), std::string::npos) << error;
+    }
+
     TEST_F(RaftSegmentStorageTest, RaftClusterGeneratesManySnapshotsAndSegmentLogsUnderBuildDirectory)
     {
       // Use a deliberately small snapshot threshold so the test quickly produces

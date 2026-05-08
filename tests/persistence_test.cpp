@@ -325,6 +325,52 @@ namespace raftdemo
       return false;
     }
 
+    bool ExtractIntField(const std::string &description,
+                         const std::string &field_name,
+                         int *value)
+    {
+      if (value == nullptr)
+      {
+        return false;
+      }
+
+      const std::string needle = field_name + "=";
+      const std::size_t start = description.find(needle);
+      if (start == std::string::npos)
+      {
+        return false;
+      }
+
+      std::size_t pos = start + needle.size();
+      if (pos < description.size() && description[pos] == '-')
+      {
+        ++pos;
+      }
+
+      std::size_t end = pos;
+      while (end < description.size() &&
+             description[end] >= '0' &&
+             description[end] <= '9')
+      {
+        ++end;
+      }
+      if (end == pos)
+      {
+        return false;
+      }
+
+      try
+      {
+        *value = std::stoi(description.substr(start + needle.size(),
+                                              end - (start + needle.size())));
+        return true;
+      }
+      catch (...)
+      {
+        return false;
+      }
+    }
+
     TEST(PersistenceTest, FullClusterRestartRecovery)
     {
       ScopedDataDir scoped_dir("test_full_restart");
@@ -429,6 +475,63 @@ namespace raftdemo
           << DescribeAllNodes(cluster.nodes);
 
       StopCluster(&cluster);
+    }
+
+    TEST(PersistenceTest, ColdRestartPreservesPersistedHardStateBeforeStart)
+    {
+      ScopedDataDir scoped_dir("test_hard_state_cold_restart");
+
+      NodeConfig config;
+      config.node_id = 1;
+      config.address = "127.0.0.1:" + std::to_string(RandomBasePort());
+      config.election_timeout_min = std::chrono::milliseconds(250);
+      config.election_timeout_max = std::chrono::milliseconds(400);
+      config.heartbeat_interval = std::chrono::milliseconds(80);
+      config.rpc_deadline = std::chrono::milliseconds(500);
+      config.data_dir = (scoped_dir.path() / "raft_data" / "node_1").string();
+
+      const auto snapshot_config = BuildPersistenceSnapshotConfig(scoped_dir.path(), config.node_id);
+      auto node = std::make_shared<RaftNode>(config, snapshot_config);
+      std::thread worker([node]()
+                         {
+        node->Start();
+        node->Wait(); });
+
+      ASSERT_NE(WaitForLeader({node}, 8s), nullptr) << node->Describe();
+      ASSERT_TRUE(ProposeSetWithRetry({node}, "hard_state_alpha", "1", 6s)) << node->Describe();
+      ASSERT_TRUE(ProposeSetWithRetry({node}, "hard_state_beta", "2", 6s)) << node->Describe();
+      ASSERT_TRUE(WaitUntilValue({node}, "hard_state_alpha", "1", 6s)) << node->Describe();
+      ASSERT_TRUE(WaitUntilValue({node}, "hard_state_beta", "2", 6s)) << node->Describe();
+
+      const NodeStatusSnapshot before_status = node->GetStatusSnapshot();
+      const std::string before_description = node->Describe();
+      int before_voted_for = -1;
+      ASSERT_TRUE(ExtractIntField(before_description, "voted_for", &before_voted_for))
+          << before_description;
+
+      node->Stop();
+      if (worker.joinable())
+      {
+        worker.join();
+      }
+
+      auto restarted = std::make_shared<RaftNode>(config, snapshot_config);
+      const NodeStatusSnapshot after_status = restarted->GetStatusSnapshot();
+      const std::string after_description = restarted->Describe();
+      int after_voted_for = -1;
+      ASSERT_TRUE(ExtractIntField(after_description, "voted_for", &after_voted_for))
+          << after_description;
+
+      EXPECT_EQ(after_status.term, before_status.term) << after_description;
+      EXPECT_EQ(after_status.commit_index, before_status.commit_index) << after_description;
+      EXPECT_EQ(after_status.last_applied, before_status.last_applied) << after_description;
+      EXPECT_EQ(after_voted_for, before_voted_for) << after_description;
+
+      std::string actual;
+      EXPECT_TRUE(restarted->DebugGetValue("hard_state_alpha", &actual));
+      EXPECT_EQ(actual, "1");
+      EXPECT_TRUE(restarted->DebugGetValue("hard_state_beta", &actual));
+      EXPECT_EQ(actual, "2");
     }
 
   } // namespace

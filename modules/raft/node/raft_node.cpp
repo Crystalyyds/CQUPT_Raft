@@ -2463,6 +2463,10 @@ RaftNode::ReplicationOutcome RaftNode::ReplicateLogEntryToMajority(std::uint64_t
     const bool ok = storage_->Save(state, reason);
     if (!ok)
     {
+      if (reason != nullptr && reason->empty())
+      {
+        *reason = "persist raft state failed";
+      }
       RecordStoragePersistFailure();
     }
     return ok;
