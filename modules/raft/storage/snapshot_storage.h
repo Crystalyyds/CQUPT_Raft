@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <filesystem>
 #include <memory>
 #include <string>
 #include <vector>
@@ -54,6 +55,49 @@ class ISnapshotStorage {
                               std::string* error) = 0;
 
   virtual const std::string& SnapshotDir() const = 0;
+};
+
+class FileSnapshotStorage final : public ISnapshotStorage {
+ public:
+  FileSnapshotStorage(std::string snapshot_dir, std::string file_prefix);
+
+  bool SaveSnapshotFile(const std::string& input_snapshot_file,
+                        std::uint64_t last_included_index,
+                        std::uint64_t last_included_term,
+                        SnapshotMeta* out_meta,
+                        std::string* error) override;
+
+  bool ListSnapshots(std::vector<SnapshotMeta>* out,
+                     std::string* error) override;
+
+  bool LoadLatestValidSnapshot(SnapshotMeta* out_meta,
+                               bool* has_snapshot,
+                               std::string* error) override;
+
+  bool PruneSnapshots(std::size_t max_keep,
+                      std::string* error) override;
+
+  const std::string& SnapshotDir() const override;
+
+ private:
+  bool WriteMeta(const std::filesystem::path& meta_path,
+                 std::uint64_t last_included_index,
+                 std::uint64_t last_included_term,
+                 std::uint64_t created_unix_ms,
+                 const std::string& data_file_name,
+                 std::uint32_t checksum,
+                 std::string* error);
+
+  bool ReadDirectorySnapshot(const std::filesystem::path& snapshot_dir,
+                             SnapshotMeta* out_meta,
+                             std::string* error);
+
+  bool ReadLegacyFlatSnapshot(const std::filesystem::path& meta_path,
+                              SnapshotMeta* out_meta,
+                              std::string* error);
+
+  std::string snapshot_dir_;
+  std::string file_prefix_;
 };
 
 std::unique_ptr<ISnapshotStorage> CreateFileSnapshotStorage(std::string snapshot_dir,

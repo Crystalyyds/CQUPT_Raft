@@ -2,6 +2,8 @@
 
 负责 Raft 持久化边界：硬状态、segment log、snapshot catalog。
 
+本模块遵守根 AGENTS.md 的 C++ 头文件 / 源文件规则：`.h` 表达接口和契约，`.cpp` 承担具体实现。
+
 ## 跨平台持久化规则
 
 storage 模块中的持久化代码不允许按平台静默降级。
