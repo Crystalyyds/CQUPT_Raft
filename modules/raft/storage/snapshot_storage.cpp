@@ -1,8 +1,10 @@
 #include "raft/storage/snapshot_storage.h"
 
 #include <algorithm>
+#include <cerrno>
 #include <chrono>
 #include <cstdint>
+#include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <iomanip>
@@ -12,6 +14,13 @@
 #include <type_traits>
 #include <utility>
 #include <vector>
+
+#if defined(_WIN32)
+#include <windows.h>
+#else
+#include <fcntl.h>
+#include <unistd.h>
+#endif
 
 namespace raftdemo {
 namespace {
@@ -23,6 +32,7 @@ constexpr std::uint32_t kLegacyMetaVersion = 1U;
 constexpr const char* kSnapshotDataFileName = "data.bin";
 constexpr const char* kSnapshotMetaFileName = "__raft_snapshot_meta";
 constexpr const char* kSnapshotPrefix = "snapshot_";
+constexpr const char* kSnapshotStagingPrefix = ".snapshot_staging_";
 
 std::uint64_t NowUnixMillis() {
   return static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(
@@ -171,6 +181,179 @@ bool ComputeFileChecksum(const std::filesystem::path& file_path,
   return true;
 }
 
+std::string LastSystemErrorMessage() {
+#if defined(_WIN32)
+  const DWORD error_code = ::GetLastError();
+  LPSTR buffer = nullptr;
+  const DWORD flags = FORMAT_MESSAGE_ALLOCATE_BUFFER |
+                      FORMAT_MESSAGE_FROM_SYSTEM |
+                      FORMAT_MESSAGE_IGNORE_INSERTS;
+  const DWORD length = ::FormatMessageA(flags,
+                                        nullptr,
+                                        error_code,
+                                        MAKELANGID(LANG_NEUTRAL, SUBLANG_DEFAULT),
+                                        reinterpret_cast<LPSTR>(&buffer),
+                                        0,
+                                        nullptr);
+  if (length == 0 || buffer == nullptr) {
+    std::ostringstream oss;
+    oss << "GetLastError=" << static_cast<unsigned long>(error_code);
+    return oss.str();
+  }
+
+  std::string message(buffer, length);
+  ::LocalFree(buffer);
+  while (!message.empty() &&
+         (message.back() == '\r' || message.back() == '\n' || message.back() == ' ')) {
+    message.pop_back();
+  }
+  std::ostringstream oss;
+  oss << message << " (GetLastError=" << static_cast<unsigned long>(error_code) << ")";
+  return oss.str();
+#else
+  return std::strerror(errno);
+#endif
+}
+
+bool SyncFile(const std::filesystem::path& path, std::string* error) {
+#if defined(_WIN32)
+  const HANDLE handle = ::CreateFileW(path.c_str(),
+                                      GENERIC_READ | GENERIC_WRITE,
+                                      FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                                      nullptr,
+                                      OPEN_EXISTING,
+                                      FILE_ATTRIBUTE_NORMAL,
+                                      nullptr);
+  if (handle == INVALID_HANDLE_VALUE) {
+    if (error != nullptr) {
+      *error = "CreateFileW for snapshot file flush failed: " + path.string() + ": " +
+               LastSystemErrorMessage();
+    }
+    return false;
+  }
+
+  if (!::FlushFileBuffers(handle)) {
+    const std::string message = LastSystemErrorMessage();
+    ::CloseHandle(handle);
+    if (error != nullptr) {
+      *error = "FlushFileBuffers for snapshot file failed: " + path.string() + ": " + message;
+    }
+    return false;
+  }
+
+  if (!::CloseHandle(handle)) {
+    if (error != nullptr) {
+      *error = "CloseHandle after snapshot file flush failed: " + path.string() + ": " +
+               LastSystemErrorMessage();
+    }
+    return false;
+  }
+  return true;
+#else
+  int flags = O_RDONLY;
+#ifdef O_CLOEXEC
+  flags |= O_CLOEXEC;
+#endif
+  const int fd = ::open(path.c_str(), flags);
+  if (fd < 0) {
+    if (error != nullptr) {
+      *error = "open snapshot file for fsync failed: " + path.string() + ": " +
+               LastSystemErrorMessage();
+    }
+    return false;
+  }
+
+  if (::fsync(fd) != 0) {
+    const std::string message = LastSystemErrorMessage();
+    ::close(fd);
+    if (error != nullptr) {
+      *error = "fsync snapshot file failed: " + path.string() + ": " + message;
+    }
+    return false;
+  }
+
+  if (::close(fd) != 0) {
+    if (error != nullptr) {
+      *error = "close snapshot file after fsync failed: " + path.string() + ": " +
+               LastSystemErrorMessage();
+    }
+    return false;
+  }
+  return true;
+#endif
+}
+
+bool SyncDirectory(const std::filesystem::path& path, std::string* error) {
+#if defined(_WIN32)
+  const HANDLE handle = ::CreateFileW(path.c_str(),
+                                      FILE_LIST_DIRECTORY,
+                                      FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                                      nullptr,
+                                      OPEN_EXISTING,
+                                      FILE_FLAG_BACKUP_SEMANTICS,
+                                      nullptr);
+  if (handle == INVALID_HANDLE_VALUE) {
+    if (error != nullptr) {
+      *error = "CreateFileW for snapshot directory flush failed: " + path.string() + ": " +
+               LastSystemErrorMessage();
+    }
+    return false;
+  }
+
+  if (!::FlushFileBuffers(handle)) {
+    const std::string message = LastSystemErrorMessage();
+    ::CloseHandle(handle);
+    if (error != nullptr) {
+      *error = "FlushFileBuffers for snapshot directory failed: " + path.string() + ": " + message;
+    }
+    return false;
+  }
+
+  if (!::CloseHandle(handle)) {
+    if (error != nullptr) {
+      *error = "CloseHandle after snapshot directory flush failed: " + path.string() + ": " +
+               LastSystemErrorMessage();
+    }
+    return false;
+  }
+  return true;
+#else
+  int flags = O_RDONLY;
+#ifdef O_DIRECTORY
+  flags |= O_DIRECTORY;
+#endif
+#ifdef O_CLOEXEC
+  flags |= O_CLOEXEC;
+#endif
+  const int fd = ::open(path.c_str(), flags);
+  if (fd < 0) {
+    if (error != nullptr) {
+      *error = "open snapshot directory for fsync failed: " + path.string() + ": " +
+               LastSystemErrorMessage();
+    }
+    return false;
+  }
+
+  if (::fsync(fd) != 0) {
+    const std::string message = LastSystemErrorMessage();
+    ::close(fd);
+    if (error != nullptr) {
+      *error = "fsync snapshot directory failed: " + path.string() + ": " + message;
+    }
+    return false;
+  }
+
+  if (::close(fd) != 0) {
+    if (error != nullptr) {
+      *error = "close snapshot directory after fsync failed: " + path.string() + ": " +
+               LastSystemErrorMessage();
+    }
+    return false;
+  }
+  return true;
+#endif
+}
+
 bool CopyFilePortable(const std::filesystem::path& from,
                       const std::filesystem::path& to,
                       std::string* error) {
@@ -196,6 +379,16 @@ bool CopyFilePortable(const std::filesystem::path& from,
     }
     return false;
   }
+  out.close();
+  if (!out) {
+    if (error != nullptr) {
+      *error = "close snapshot data failed: " + to.string();
+    }
+    return false;
+  }
+  if (!SyncFile(to, error)) {
+    return false;
+  }
   return true;
 }
 
@@ -218,7 +411,8 @@ class FileSnapshotStorage final : public ISnapshotStorage {
     }
 
     std::error_code ec;
-    std::filesystem::create_directories(snapshot_dir_, ec);
+    const std::filesystem::path root(snapshot_dir_);
+    std::filesystem::create_directories(root, ec);
     if (ec) {
       if (error != nullptr) {
         *error = "create snapshot dir failed: " + ec.message();
@@ -227,50 +421,134 @@ class FileSnapshotStorage final : public ISnapshotStorage {
     }
 
     const std::uint64_t now_ms = NowUnixMillis();
-    const std::filesystem::path root(snapshot_dir_);
+    const std::filesystem::path root_parent = root.parent_path();
+    if (!root_parent.empty() && !SyncDirectory(root_parent, error)) {
+      return false;
+    }
     const std::string formatted_index = FormatIndex(last_included_index);
     const std::filesystem::path final_dir =
         root / (std::string(kSnapshotPrefix) + formatted_index);
-    const std::filesystem::path data_path = final_dir / kSnapshotDataFileName;
-    const std::filesystem::path meta_path = final_dir / kSnapshotMetaFileName;
 
-    // No temp snapshot directory is created. The final snapshot directory is
-    // written directly under the configured snapshot_dir so test/debug files
-    // are visible immediately inside build/tests/raft_test_data.
+    if (!SyncDirectory(root, error)) {
+      return false;
+    }
+
+    SnapshotMeta existing_meta;
+    std::string existing_error;
     ec.clear();
-    std::filesystem::remove_all(final_dir, ec);
+    if (std::filesystem::exists(final_dir, ec) &&
+        ReadDirectorySnapshot(final_dir, &existing_meta, &existing_error)) {
+      if (existing_meta.last_included_term != last_included_term) {
+        if (error != nullptr) {
+          *error = "existing snapshot has same index but different term: " + final_dir.string();
+        }
+        return false;
+      }
+      ec.clear();
+      std::filesystem::remove(input_snapshot_file, ec);
+      if (out_meta != nullptr) {
+        *out_meta = existing_meta;
+      }
+      return true;
+    }
     if (ec) {
       if (error != nullptr) {
-        *error = "remove old snapshot dir failed: " + ec.message();
+        *error = "check snapshot dir failed: " + final_dir.string() + ": " + ec.message();
+      }
+      return false;
+    }
+
+    const std::filesystem::path staging_dir =
+        root / (std::string(kSnapshotStagingPrefix) + formatted_index + "_" +
+                std::to_string(now_ms));
+    const std::filesystem::path staging_data_path = staging_dir / kSnapshotDataFileName;
+    const std::filesystem::path staging_meta_path = staging_dir / kSnapshotMetaFileName;
+
+    ec.clear();
+    std::filesystem::remove_all(staging_dir, ec);
+    if (ec) {
+      if (error != nullptr) {
+        *error = "remove stale snapshot staging dir failed: " + staging_dir.string() + ": " +
+                 ec.message();
       }
       return false;
     }
 
     ec.clear();
-    std::filesystem::create_directories(final_dir, ec);
+    std::filesystem::create_directories(staging_dir, ec);
     if (ec) {
       if (error != nullptr) {
-        *error = "create snapshot dir failed: " + ec.message();
+        *error = "create snapshot staging dir failed: " + staging_dir.string() + ": " +
+                 ec.message();
       }
       return false;
     }
+    if (!SyncDirectory(root, error)) {
+      std::filesystem::remove_all(staging_dir, ec);
+      return false;
+    }
 
-    if (!CopyFilePortable(input_snapshot_file, data_path, error)) {
-      std::filesystem::remove_all(final_dir, ec);
+    if (!CopyFilePortable(input_snapshot_file, staging_data_path, error)) {
+      std::filesystem::remove_all(staging_dir, ec);
       return false;
     }
 
     std::uint32_t checksum = 0;
-    if (!ComputeFileChecksum(data_path, &checksum, error)) {
-      std::filesystem::remove_all(final_dir, ec);
+    if (!ComputeFileChecksum(staging_data_path, &checksum, error)) {
+      std::filesystem::remove_all(staging_dir, ec);
       return false;
     }
 
-    if (!WriteMeta(meta_path, last_included_index, last_included_term, now_ms,
+    if (!WriteMeta(staging_meta_path, last_included_index, last_included_term, now_ms,
                    kSnapshotDataFileName, checksum, error)) {
-      std::filesystem::remove_all(final_dir, ec);
+      std::filesystem::remove_all(staging_dir, ec);
       return false;
     }
+    if (!SyncDirectory(staging_dir, error)) {
+      std::filesystem::remove_all(staging_dir, ec);
+      return false;
+    }
+
+    ec.clear();
+    if (std::filesystem::exists(final_dir, ec)) {
+      std::filesystem::remove_all(final_dir, ec);
+      if (ec) {
+        if (error != nullptr) {
+          *error = "remove invalid snapshot dir failed: " + final_dir.string() + ": " +
+                   ec.message();
+        }
+        std::filesystem::remove_all(staging_dir, ec);
+        return false;
+      }
+      if (!SyncDirectory(root, error)) {
+        std::filesystem::remove_all(staging_dir, ec);
+        return false;
+      }
+    }
+    if (ec) {
+      if (error != nullptr) {
+        *error = "check invalid snapshot dir failed: " + final_dir.string() + ": " + ec.message();
+      }
+      std::filesystem::remove_all(staging_dir, ec);
+      return false;
+    }
+
+    ec.clear();
+    std::filesystem::rename(staging_dir, final_dir, ec);
+    if (ec) {
+      if (error != nullptr) {
+        *error = "publish snapshot staging dir failed: " + staging_dir.string() + " -> " +
+                 final_dir.string() + ": " + ec.message();
+      }
+      std::filesystem::remove_all(staging_dir, ec);
+      return false;
+    }
+    if (!SyncDirectory(root, error)) {
+      return false;
+    }
+
+    const std::filesystem::path data_path = final_dir / kSnapshotDataFileName;
+    const std::filesystem::path meta_path = final_dir / kSnapshotMetaFileName;
 
     ec.clear();
     std::filesystem::remove(input_snapshot_file, ec);
@@ -384,25 +662,34 @@ class FileSnapshotStorage final : public ISnapshotStorage {
     }
 
     std::error_code ec;
+    bool removed_any = false;
     for (std::size_t i = max_keep; i < snapshots.size(); ++i) {
       if (!snapshots[i].snapshot_dir.empty()) {
         ec.clear();
         std::filesystem::remove_all(snapshots[i].snapshot_dir, ec);
         if (ec && error != nullptr) {
           *error = "remove old snapshot dir failed: " + ec.message();
+          return false;
         }
+        removed_any = true;
       } else {
         ec.clear();
         std::filesystem::remove(snapshots[i].snapshot_path, ec);
         if (ec && error != nullptr) {
           *error = "remove old snapshot data failed: " + ec.message();
+          return false;
         }
         ec.clear();
         std::filesystem::remove(snapshots[i].meta_path, ec);
         if (ec && error != nullptr) {
           *error = "remove old snapshot meta failed: " + ec.message();
+          return false;
         }
+        removed_any = true;
       }
+    }
+    if (removed_any && !SyncDirectory(snapshot_dir_, error)) {
+      return false;
     }
     return true;
   }
@@ -443,6 +730,16 @@ class FileSnapshotStorage final : public ISnapshotStorage {
       if (error != nullptr) {
         *error = "flush snapshot meta file failed";
       }
+      return false;
+    }
+    out.close();
+    if (!out) {
+      if (error != nullptr) {
+        *error = "close snapshot meta file failed: " + meta_path.string();
+      }
+      return false;
+    }
+    if (!SyncFile(meta_path, error)) {
       return false;
     }
     return true;

@@ -4,6 +4,7 @@
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <sstream>
 #include <string>
 #include <vector>
 
@@ -42,6 +43,14 @@ void WriteTextFile(const std::filesystem::path& path, const std::string& content
   out << content;
   out.flush();
   ASSERT_TRUE(static_cast<bool>(out));
+}
+
+std::string ReadTextFile(const std::filesystem::path& path) {
+  std::ifstream in(path, std::ios::binary);
+  EXPECT_TRUE(in.is_open()) << path.string();
+  std::ostringstream buffer;
+  buffer << in.rdbuf();
+  return buffer.str();
 }
 
 std::size_t CountSnapshotDirs(const std::filesystem::path& dir) {
@@ -114,7 +123,7 @@ TEST_F(SnapshotStorageReliabilityTest, SavesSnapshotAsDirectoryWithDataAndMeta) 
   EXPECT_EQ(std::filesystem::path(meta.meta_path).filename().string(), "__raft_snapshot_meta");
 }
 
-TEST_F(SnapshotStorageReliabilityTest, SavesDirectlyWithoutTempSnapshotDirectory) {
+TEST_F(SnapshotStorageReliabilityTest, PublishesSnapshotWithCompatibleFinalLayout) {
   SaveSnapshot(10, 1, "stable-snapshot-10");
   SaveSnapshot(20, 2, "stable-snapshot-20");
 
@@ -128,13 +137,37 @@ TEST_F(SnapshotStorageReliabilityTest, SavesDirectlyWithoutTempSnapshotDirectory
   for (const auto& entry : std::filesystem::directory_iterator(snapshot_dir_, ec)) {
     ASSERT_FALSE(ec);
     const std::string name = entry.path().filename().string();
-    EXPECT_NE(name.rfind("temp_", 0), 0U) << "unexpected temp snapshot dir: " << entry.path();
+    EXPECT_NE(name.rfind(".snapshot_staging_", 0), 0U)
+        << "unexpected staging snapshot dir after publish: " << entry.path();
   }
 
   EXPECT_TRUE(std::filesystem::exists(snapshot_dir_ / "snapshot_00000000000000000010" / "data.bin"));
   EXPECT_TRUE(std::filesystem::exists(snapshot_dir_ / "snapshot_00000000000000000010" / "__raft_snapshot_meta"));
   EXPECT_TRUE(std::filesystem::exists(snapshot_dir_ / "snapshot_00000000000000000020" / "data.bin"));
   EXPECT_TRUE(std::filesystem::exists(snapshot_dir_ / "snapshot_00000000000000000020" / "__raft_snapshot_meta"));
+}
+
+TEST_F(SnapshotStorageReliabilityTest, IgnoresStagingAndIncompleteSnapshotDirectories) {
+  SnapshotMeta old_meta = SaveSnapshot(10, 1, "valid-snapshot-10");
+
+  WriteTextFile(snapshot_dir_ / ".snapshot_staging_00000000000000000030_1" / "data.bin",
+                "staged-but-not-published");
+  WriteTextFile(snapshot_dir_ / "snapshot_00000000000000000020" / "data.bin",
+                "missing-meta");
+  WriteTextFile(snapshot_dir_ / "snapshot_00000000000000000030" / "__raft_snapshot_meta",
+                "missing-data");
+
+  std::vector<SnapshotMeta> snapshots;
+  std::string error;
+  ASSERT_TRUE(storage_->ListSnapshots(&snapshots, &error)) << error;
+  ASSERT_EQ(snapshots.size(), 1U);
+  EXPECT_EQ(snapshots.front().last_included_index, old_meta.last_included_index);
+
+  SnapshotMeta loaded;
+  bool has_snapshot = false;
+  ASSERT_TRUE(storage_->LoadLatestValidSnapshot(&loaded, &has_snapshot, &error)) << error;
+  ASSERT_TRUE(has_snapshot);
+  EXPECT_EQ(loaded.last_included_index, old_meta.last_included_index);
 }
 
 TEST_F(SnapshotStorageReliabilityTest, FallsBackToOlderSnapshotWhenNewestIsCorrupted) {
@@ -151,6 +184,21 @@ TEST_F(SnapshotStorageReliabilityTest, FallsBackToOlderSnapshotWhenNewestIsCorru
   EXPECT_EQ(loaded.last_included_index, old_meta.last_included_index);
   EXPECT_EQ(loaded.last_included_term, old_meta.last_included_term);
   EXPECT_EQ(std::filesystem::path(loaded.snapshot_path).filename().string(), "data.bin");
+}
+
+TEST_F(SnapshotStorageReliabilityTest, SameIndexSameTermSaveIsIdempotent) {
+  SnapshotMeta first = SaveSnapshot(20, 2, "stable-snapshot-20");
+  SnapshotMeta second = SaveSnapshot(20, 2, "replacement-payload-ignored");
+
+  EXPECT_EQ(second.last_included_index, first.last_included_index);
+  EXPECT_EQ(second.last_included_term, first.last_included_term);
+  EXPECT_EQ(std::filesystem::path(second.snapshot_dir), std::filesystem::path(first.snapshot_dir));
+  EXPECT_EQ(ReadTextFile(second.snapshot_path), "stable-snapshot-20");
+
+  std::vector<SnapshotMeta> snapshots;
+  std::string error;
+  ASSERT_TRUE(storage_->ListSnapshots(&snapshots, &error)) << error;
+  ASSERT_EQ(snapshots.size(), 1U);
 }
 
 TEST_F(SnapshotStorageReliabilityTest, PrunesOldSnapshotDirectoriesByIndex) {

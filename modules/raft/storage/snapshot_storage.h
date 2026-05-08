@@ -33,10 +33,9 @@ class ISnapshotStorage {
  public:
   virtual ~ISnapshotStorage() = default;
 
-  // Persist a completed state-machine snapshot file. The implementation copies
-  // input_snapshot_file directly into snapshot_<last_included_index>/data.bin
-  // under the configured snapshot directory and writes __raft_snapshot_meta.
-  // No temp snapshot directory is created.
+  // Persist a completed state-machine snapshot file. The implementation
+  // publishes snapshot_<last_included_index>/data.bin and
+  // __raft_snapshot_meta under the configured snapshot directory.
   virtual bool SaveSnapshotFile(const std::string& input_snapshot_file,
                                 std::uint64_t last_included_index,
                                 std::uint64_t last_included_term,

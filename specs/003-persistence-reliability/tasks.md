@@ -44,3 +44,32 @@
 - [x] T316 更新 `progress.md`
 - [x] T317 更新 `decisions.md`
 - [x] T318 生成 `specs/003-persistence-reliability/phase-reports/phase-3-meta-hard-state-fsync.md`
+
+## Phase 4A Checklist
+
+- [x] T401 梳理本地 snapshot save / publish 调用链
+- [x] T402 梳理 `InstallSnapshot` 持久化 / 加载 / 恢复调用链
+- [x] T403 梳理 startup snapshot load / trusted-state 选择规则
+- [x] T404 梳理 snapshot data / metadata 与 state machine work-file 边界
+- [x] T405 标记 snapshot file `fsync` / directory `fsync` 缺口
+- [x] T406 标记 snapshot publish crash window 与 log compaction 边界
+- [x] T407 规划 Phase 4B 受影响文件与测试范围
+- [x] T408 生成 `specs/003-persistence-reliability/phase-reports/phase-4a-snapshot-atomic-publish-plan.md`
+
+## Phase 4B Checklist
+
+- [x] T409 将 snapshot publish 从 direct-to-final-dir 改为 staged temp snapshot dir publish
+- [x] T410 为 `snapshot_<index>/data.bin` 增加 file fsync 语义
+- [x] T411 为 `snapshot_<index>/__raft_snapshot_meta` 增加 file fsync 语义
+- [x] T412 为 staged snapshot dir 和 `snapshot_dir` publish / prune 路径补齐 directory fsync 语义
+- [x] T413 处理同 index snapshot 覆盖路径，消除 `remove_all(final_dir)` 先删后发的 crash window
+- [x] T414 验证 `SnapshotWorkerLoop` / `OnInstallSnapshot` 与 snapshot publish 的边界；未发现必须修改 `raft_node.cpp` 的失败暴露或时序缺口
+- [x] T415 确认 restart recovery 继续忽略 temp / incomplete snapshot，并保持“最新有效优先、无效回退到旧 snapshot”
+- [x] T416 更新 `tests/test_snapshot_storage_reliability.cpp`，覆盖 staged publish、缺失 meta、缺失 data、损坏 checksum 和 temp dir 忽略场景
+- [x] T417 检查 `tests/snapshot_test.cpp`、`tests/test_raft_snapshot_restart.cpp`、`tests/test_raft_snapshot_diagnosis.cpp` 中与 snapshot publish / restart recovery 直接相关的断言；现有断言仍覆盖最终布局和恢复行为，无需源码修改
+- [x] T418 确认 POSIX 分支使用真实 fsync，Windows 分支不允许 no-op success；若目录 flush 无法等价实现则返回明确错误
+- [x] T419 确认不修改 snapshot data / metadata 持久化格式
+- [x] T420 运行 snapshot / restart / recovery 相关测试
+- [x] T421 更新 `progress.md`
+- [x] T422 更新 `decisions.md`
+- [x] T423 生成 `specs/003-persistence-reliability/phase-reports/phase-4-snapshot-atomic-publish.md`
