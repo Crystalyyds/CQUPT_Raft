@@ -1,0 +1,9 @@
+/build
+/vcpkg-configuration.json
+/test.sh
+/scripts
+/build
+/raft_data
+/raft_snapshots
+/raft_test_data
+/deploy

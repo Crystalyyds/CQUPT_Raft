@@ -2,7 +2,9 @@
 
 #include <algorithm>
 #include <array>
+#include <cerrno>
 #include <cstdint>
+#include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <iomanip>
@@ -13,6 +15,13 @@
 #include <type_traits>
 #include <utility>
 #include <vector>
+
+#if defined(_WIN32)
+#include <windows.h>
+#else
+#include <fcntl.h>
+#include <unistd.h>
+#endif
 
 #include "raft/node/raft_node.h"
 
@@ -268,6 +277,230 @@ namespace raftdemo
       return true;
     }
 
+    std::string LastSystemErrorMessage()
+    {
+#if defined(_WIN32)
+      const DWORD error_code = ::GetLastError();
+      LPSTR buffer = nullptr;
+      const DWORD flags = FORMAT_MESSAGE_ALLOCATE_BUFFER |
+                          FORMAT_MESSAGE_FROM_SYSTEM |
+                          FORMAT_MESSAGE_IGNORE_INSERTS;
+      const DWORD length = ::FormatMessageA(flags,
+                                            nullptr,
+                                            error_code,
+                                            MAKELANGID(LANG_NEUTRAL, SUBLANG_DEFAULT),
+                                            reinterpret_cast<LPSTR>(&buffer),
+                                            0,
+                                            nullptr);
+      if (length == 0 || buffer == nullptr)
+      {
+        std::ostringstream oss;
+        oss << "GetLastError=" << static_cast<unsigned long>(error_code);
+        return oss.str();
+      }
+
+      std::string message(buffer, length);
+      ::LocalFree(buffer);
+      while (!message.empty() &&
+             (message.back() == '\r' || message.back() == '\n' || message.back() == ' '))
+      {
+        message.pop_back();
+      }
+      std::ostringstream oss;
+      oss << message << " (GetLastError=" << static_cast<unsigned long>(error_code) << ")";
+      return oss.str();
+#else
+      return std::strerror(errno);
+#endif
+    }
+
+    bool SyncFile(const std::filesystem::path &path, std::string *error)
+    {
+#if defined(_WIN32)
+      const HANDLE handle = ::CreateFileW(path.c_str(),
+                                          GENERIC_READ | GENERIC_WRITE,
+                                          FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                                          nullptr,
+                                          OPEN_EXISTING,
+                                          FILE_ATTRIBUTE_NORMAL,
+                                          nullptr);
+      if (handle == INVALID_HANDLE_VALUE)
+      {
+        if (error != nullptr)
+        {
+          *error = "CreateFileW for file flush failed: " + path.string() + ": " + LastSystemErrorMessage();
+        }
+        return false;
+      }
+
+      if (!::FlushFileBuffers(handle))
+      {
+        const std::string message = LastSystemErrorMessage();
+        ::CloseHandle(handle);
+        if (error != nullptr)
+        {
+          *error = "FlushFileBuffers for file failed: " + path.string() + ": " + message;
+        }
+        return false;
+      }
+
+      if (!::CloseHandle(handle))
+      {
+        if (error != nullptr)
+        {
+          *error = "CloseHandle after file flush failed: " + path.string() + ": " + LastSystemErrorMessage();
+        }
+        return false;
+      }
+      return true;
+#else
+      int flags = O_RDONLY;
+#ifdef O_CLOEXEC
+      flags |= O_CLOEXEC;
+#endif
+      const int fd = ::open(path.c_str(), flags);
+      if (fd < 0)
+      {
+        if (error != nullptr)
+        {
+          *error = "open file for fsync failed: " + path.string() + ": " + LastSystemErrorMessage();
+        }
+        return false;
+      }
+
+      if (::fsync(fd) != 0)
+      {
+        const std::string message = LastSystemErrorMessage();
+        ::close(fd);
+        if (error != nullptr)
+        {
+          *error = "fsync file failed: " + path.string() + ": " + message;
+        }
+        return false;
+      }
+
+      if (::close(fd) != 0)
+      {
+        if (error != nullptr)
+        {
+          *error = "close file after fsync failed: " + path.string() + ": " + LastSystemErrorMessage();
+        }
+        return false;
+      }
+      return true;
+#endif
+    }
+
+    bool SyncDirectory(const std::filesystem::path &path, std::string *error)
+    {
+#if defined(_WIN32)
+      const HANDLE handle = ::CreateFileW(path.c_str(),
+                                          FILE_LIST_DIRECTORY,
+                                          FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                                          nullptr,
+                                          OPEN_EXISTING,
+                                          FILE_FLAG_BACKUP_SEMANTICS,
+                                          nullptr);
+      if (handle == INVALID_HANDLE_VALUE)
+      {
+        if (error != nullptr)
+        {
+          *error = "CreateFileW for directory flush failed: " + path.string() + ": " + LastSystemErrorMessage();
+        }
+        return false;
+      }
+
+      if (!::FlushFileBuffers(handle))
+      {
+        const std::string message = LastSystemErrorMessage();
+        ::CloseHandle(handle);
+        if (error != nullptr)
+        {
+          *error = "FlushFileBuffers for directory failed: " + path.string() + ": " + message;
+        }
+        return false;
+      }
+
+      if (!::CloseHandle(handle))
+      {
+        if (error != nullptr)
+        {
+          *error = "CloseHandle after directory flush failed: " + path.string() + ": " + LastSystemErrorMessage();
+        }
+        return false;
+      }
+      return true;
+#else
+      int flags = O_RDONLY;
+#ifdef O_DIRECTORY
+      flags |= O_DIRECTORY;
+#endif
+#ifdef O_CLOEXEC
+      flags |= O_CLOEXEC;
+#endif
+      const int fd = ::open(path.c_str(), flags);
+      if (fd < 0)
+      {
+        if (error != nullptr)
+        {
+          *error = "open directory for fsync failed: " + path.string() + ": " + LastSystemErrorMessage();
+        }
+        return false;
+      }
+
+      if (::fsync(fd) != 0)
+      {
+        const std::string message = LastSystemErrorMessage();
+        ::close(fd);
+        if (error != nullptr)
+        {
+          *error = "fsync directory failed: " + path.string() + ": " + message;
+        }
+        return false;
+      }
+
+      if (::close(fd) != 0)
+      {
+        if (error != nullptr)
+        {
+          *error = "close directory after fsync failed: " + path.string() + ": " + LastSystemErrorMessage();
+        }
+        return false;
+      }
+      return true;
+#endif
+    }
+
+    bool FlushAndSyncSegmentFile(std::ofstream *out,
+                                 const std::filesystem::path &segment_path,
+                                 bool is_final_segment,
+                                 std::string *error)
+    {
+      if (out == nullptr || !out->is_open())
+      {
+        return true;
+      }
+
+      out->flush();
+      if (!(*out))
+      {
+        if (error != nullptr)
+        {
+          *error = is_final_segment ? "flush final segment file failed"
+                                    : "flush segment file failed";
+        }
+        return false;
+      }
+
+      if (!SyncFile(segment_path, error))
+      {
+        return false;
+      }
+
+      out->close();
+      return true;
+    }
+
     bool ReplaceDirectory(const std::filesystem::path &src,
                           const std::filesystem::path &dst,
                           const std::filesystem::path &backup,
@@ -315,12 +548,26 @@ namespace raftdemo
         return false;
       }
 
+      const std::filesystem::path parent_dir = dst.parent_path();
+      if (!parent_dir.empty() && !SyncDirectory(parent_dir, error))
+      {
+        return false;
+      }
+
       ec.clear();
       std::filesystem::remove_all(backup, ec);
       if (ec && error != nullptr)
       {
         // Non-fatal for correctness. Keep the save successful but surface the message.
         *error = "saved state but failed to remove old log backup dir: " + ec.message();
+      }
+      else if (!parent_dir.empty())
+      {
+        std::string sync_error;
+        if (!SyncDirectory(parent_dir, &sync_error) && error != nullptr)
+        {
+          *error = sync_error;
+        }
       }
       return true;
     }
@@ -707,14 +954,20 @@ namespace raftdemo
           }
           if (!in || in.gcount() != static_cast<std::streamsize>(sizeof(header)))
           {
-            TruncateFile(path, last_good_pos);
+            if (!TruncateFile(path, last_good_pos, error))
+            {
+              return false;
+            }
             *tail_truncated = true;
             break;
           }
           if (header.magic != kSegmentMagic || header.version != kSegmentVersion ||
               header.type != kEntryTypeNormal || header.data_size > kMaxCommandBytes)
           {
-            TruncateFile(path, last_good_pos);
+            if (!TruncateFile(path, last_good_pos, error))
+            {
+              return false;
+            }
             *tail_truncated = true;
             break;
           }
@@ -726,7 +979,10 @@ namespace raftdemo
             in.read(data.data(), static_cast<std::streamsize>(header.data_size));
             if (!in)
             {
-              TruncateFile(path, last_good_pos);
+              if (!TruncateFile(path, last_good_pos, error))
+              {
+                return false;
+              }
               *tail_truncated = true;
               break;
             }
@@ -736,7 +992,10 @@ namespace raftdemo
                                                              header.type, header.data_size, data);
           if (checksum != header.checksum)
           {
-            TruncateFile(path, last_good_pos);
+            if (!TruncateFile(path, last_good_pos, error))
+            {
+              return false;
+            }
             *tail_truncated = true;
             break;
           }
@@ -758,10 +1017,19 @@ namespace raftdemo
         return true;
       }
 
-      void TruncateFile(const std::filesystem::path &path, std::uintmax_t size)
+      bool TruncateFile(const std::filesystem::path &path, std::uintmax_t size, std::string *error)
       {
         std::error_code ec;
         std::filesystem::resize_file(path, size, ec);
+        if (ec)
+        {
+          if (error != nullptr)
+          {
+            *error = "truncate segment file failed: " + path.string() + ": " + ec.message();
+          }
+          return false;
+        }
+        return SyncFile(path, error);
       }
 
       bool WriteSegments(const std::filesystem::path &log_dir,
@@ -770,10 +1038,11 @@ namespace raftdemo
       {
         if (records.empty())
         {
-          return true;
+          return SyncDirectory(log_dir, error);
         }
 
         std::ofstream out;
+        std::filesystem::path current_segment_path;
         std::uint64_t current_segment_start = 0;
         std::uint64_t current_segment_count = 0;
 
@@ -781,28 +1050,22 @@ namespace raftdemo
         {
           if (!out.is_open() || current_segment_count >= kMaxEntriesPerSegment)
           {
-            if (out.is_open())
+            if (!current_segment_path.empty())
             {
-              out.flush();
-              if (!out)
+              if (!FlushAndSyncSegmentFile(&out, current_segment_path, false, error))
               {
-                if (error != nullptr)
-                {
-                  *error = "flush segment file failed";
-                }
                 return false;
               }
-              out.close();
             }
             current_segment_start = record.index;
             current_segment_count = 0;
-            const std::filesystem::path segment_path = log_dir / SegmentFileName(current_segment_start);
-            out.open(segment_path, std::ios::binary | std::ios::trunc);
+            current_segment_path = log_dir / SegmentFileName(current_segment_start);
+            out.open(current_segment_path, std::ios::binary | std::ios::trunc);
             if (!out.is_open())
             {
               if (error != nullptr)
               {
-                *error = "open segment file for write failed: " + segment_path.string();
+                *error = "open segment file for write failed: " + current_segment_path.string();
               }
               return false;
             }
@@ -846,17 +1109,12 @@ namespace raftdemo
 
         if (out.is_open())
         {
-          out.flush();
-          if (!out)
+          if (!FlushAndSyncSegmentFile(&out, current_segment_path, true, error))
           {
-            if (error != nullptr)
-            {
-              *error = "flush final segment file failed";
-            }
             return false;
           }
         }
-        return true;
+        return SyncDirectory(log_dir, error);
       }
 
       bool LoadLegacy(const std::filesystem::path &state_path,

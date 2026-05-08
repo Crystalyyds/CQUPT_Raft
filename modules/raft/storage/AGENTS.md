@@ -2,6 +2,15 @@
 
 负责 Raft 持久化边界：硬状态、segment log、snapshot catalog。
 
+## 跨平台持久化规则
+
+storage 模块中的持久化代码不允许按平台静默降级。
+
+- POSIX/Linux 路径在 durability contract 要求时，应使用真实的 file fsync 和 directory fsync。
+- Windows 路径在需要等价持久化语义时，应使用 FlushFileBuffers。
+- 如果目录发布语义在某个平台无法可靠实现，不允许静默返回成功，必须返回明确错误或在 durability contract 中记录较弱保证。
+- required durability operations 不允许出现 no-op success 分支。
+
 ## Files
 
 - `raft_storage.h`

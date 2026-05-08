@@ -2,6 +2,12 @@
 
 一句话说明：这是一个基于 C++20、gRPC、Protobuf、GoogleTest 的 Raft KV 内核项目，重点在一致性内核、持久化、快照、追赶和重启恢复。
 
+## 全局规则
+
+- 平台相关的 durability 代码不允许静默降级。
+- 如果一个平台实现了真实持久化语义，其他平台分支必须提供等价行为、返回明确错误，或在 durability contract 中明确记录较弱保证。
+- 对 required durability operations，不允许使用 no-op 后直接返回成功的实现。
+
 ## 使用规则
 
 - 先读根 `AGENTS.md`。
@@ -125,6 +131,7 @@ CTEST_PARALLEL_LEVEL=1 ./test.sh --group all
 ## 上下文节省规则
 
 - 不要默认扫描整个仓库。
+- 不要扫描NOTREAD.md文件里面标记的文件
 - 先读根 `AGENTS.md`，再读目标模块 `AGENTS.md`。
 - `.gitignore` 覆盖内容、构建产物、缓存、运行数据、日志、临时文件默认不读。
 - 运行测试产生的 `raft_data/`、`raft_snapshots/`、`build/tests/raft_test_data/` 不要当作源码分析。

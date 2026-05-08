@@ -5,6 +5,7 @@
 #include <cstdlib>
 #include <cstdint>
 #include <filesystem>
+#include <fstream>
 #include <iostream>
 #include <memory>
 #include <optional>
@@ -723,6 +724,70 @@ namespace raftdemo
       EXPECT_EQ(loaded.log.back().index, 1300U);
       EXPECT_EQ(loaded.commit_index, 1300U);
       EXPECT_EQ(loaded.last_applied, 1300U);
+    }
+
+    TEST_F(RaftSegmentStorageTest, TruncatesCorruptedSegmentTailDuringRecovery)
+    {
+      const auto storage_root = data_root_ / "direct_storage_tail_truncate";
+      auto storage = CreateFileRaftStorage(storage_root.string());
+      auto state = MakeState(1, 900);
+
+      std::string error;
+      ASSERT_TRUE(storage->Save(state, &error)) << error;
+
+      const auto segment_files = ListFilesWithExtension(storage_root / "log", ".log");
+      ASSERT_GE(segment_files.size(), 2U) << DescribeDirectoryTree(root_);
+
+      const auto tail_segment = segment_files.back();
+      std::error_code ec;
+      const auto original_size = std::filesystem::file_size(tail_segment, ec);
+      ASSERT_FALSE(ec) << ec.message();
+
+      {
+        std::ofstream out(tail_segment, std::ios::binary | std::ios::app);
+        ASSERT_TRUE(out.is_open()) << tail_segment.string();
+        const std::string junk = "corrupted-tail-bytes";
+        out.write(junk.data(), static_cast<std::streamsize>(junk.size()));
+        out.flush();
+        ASSERT_TRUE(out) << "failed to append corruption to " << tail_segment.string();
+      }
+
+      const auto corrupted_size = std::filesystem::file_size(tail_segment, ec);
+      ASSERT_FALSE(ec) << ec.message();
+      ASSERT_GT(corrupted_size, original_size);
+
+      PersistentRaftState loaded;
+      bool has_state = false;
+      ASSERT_TRUE(storage->Load(&loaded, &has_state, &error)) << error;
+      ASSERT_TRUE(has_state);
+      ASSERT_EQ(loaded.log.size(), state.log.size());
+      EXPECT_EQ(loaded.log.front().index, state.log.front().index);
+      EXPECT_EQ(loaded.log.back().index, state.log.back().index);
+      EXPECT_EQ(loaded.log.back().command, state.log.back().command);
+
+      const auto truncated_size = std::filesystem::file_size(tail_segment, ec);
+      ASSERT_FALSE(ec) << ec.message();
+      EXPECT_EQ(truncated_size, original_size) << DescribeDirectoryTree(root_);
+    }
+
+    TEST_F(RaftSegmentStorageTest, SaveDoesNotLeaveTemporaryOrBackupLogDirectories)
+    {
+      const auto storage_root = data_root_ / "direct_storage_publish_cleanup";
+      auto storage = CreateFileRaftStorage(storage_root.string());
+      std::string error;
+
+      ASSERT_TRUE(storage->Save(MakeState(1, 1300), &error)) << error;
+      EXPECT_TRUE(std::filesystem::exists(storage_root / "log"));
+      EXPECT_FALSE(std::filesystem::exists(storage_root / "log.tmp")) << DescribeDirectoryTree(root_);
+      EXPECT_FALSE(std::filesystem::exists(storage_root / "log.bak")) << DescribeDirectoryTree(root_);
+
+      auto compacted = MakeState(900, 1300);
+      compacted.log.front().command = "publish-boundary-entry";
+      ASSERT_TRUE(storage->Save(compacted, &error)) << error;
+
+      EXPECT_TRUE(std::filesystem::exists(storage_root / "log"));
+      EXPECT_FALSE(std::filesystem::exists(storage_root / "log.tmp")) << DescribeDirectoryTree(root_);
+      EXPECT_FALSE(std::filesystem::exists(storage_root / "log.bak")) << DescribeDirectoryTree(root_);
     }
 
     TEST_F(RaftSegmentStorageTest, RaftClusterGeneratesManySnapshotsAndSegmentLogsUnderBuildDirectory)
