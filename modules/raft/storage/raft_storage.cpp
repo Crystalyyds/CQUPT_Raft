@@ -213,6 +213,36 @@ namespace raftdemo
       return oss.str();
     }
 
+    std::string DescribeMetaLogBoundary(const std::filesystem::path &meta_path,
+                                        std::uint64_t first_log_index,
+                                        std::uint64_t last_log_index,
+                                        std::uint64_t log_count)
+    {
+      std::ostringstream oss;
+      oss << "meta_path=" << meta_path.string()
+          << ", first_log_index=" << first_log_index
+          << ", last_log_index=" << last_log_index
+          << ", log_count=" << log_count;
+      return oss.str();
+    }
+
+    std::string DescribeSegmentFiles(
+        const std::vector<std::pair<std::uint64_t, std::filesystem::path>> &files)
+    {
+      std::ostringstream oss;
+      oss << '[';
+      for (std::size_t i = 0; i < files.size(); ++i)
+      {
+        if (i > 0)
+        {
+          oss << ", ";
+        }
+        oss << files[i].second.filename().string();
+      }
+      oss << ']';
+      return oss.str();
+    }
+
     bool ParseSegmentStartIndex(const std::filesystem::path &path, std::uint64_t *index)
     {
       if (index == nullptr)
@@ -714,14 +744,28 @@ namespace raftdemo
         std::uint64_t first_log_index = 0;
         std::uint64_t last_log_index = 0;
         std::uint64_t log_count = 0;
-        if (!ReadMeta(meta_path, state, &first_log_index, &last_log_index, &log_count, error))
+        std::string meta_error;
+        if (!ReadMeta(meta_path, state, &first_log_index, &last_log_index, &log_count, &meta_error))
         {
+          if (error != nullptr)
+          {
+            *error = "load segmented raft state failed: meta=" + meta_path.string() +
+                     ", log_dir=" + log_dir.string() + ", reason=" + meta_error;
+          }
           return false;
         }
 
         std::vector<LogRecord> loaded;
-        if (!LoadSegments(log_dir, first_log_index, last_log_index, log_count, &loaded, error))
+        std::string log_error;
+        if (!LoadSegments(log_dir, first_log_index, last_log_index, log_count, &loaded, &log_error))
         {
+          if (error != nullptr)
+          {
+            *error = "load segmented raft state failed: meta=" + meta_path.string() +
+                     ", log_dir=" + log_dir.string() + ", " +
+                     DescribeMetaLogBoundary(meta_path, first_log_index, last_log_index, log_count) +
+                     ", reason=" + log_error;
+          }
           return false;
         }
 
@@ -750,15 +794,29 @@ namespace raftdemo
         std::uint32_t magic = 0;
         std::uint32_t version = 0;
         std::int64_t voted_for = -1;
-        if (!ReadPod(in, &magic, error) ||
-            !ReadPod(in, &version, error) ||
-            !ReadPod(in, &state->current_term, error) ||
-            !ReadPod(in, &voted_for, error) ||
-            !ReadPod(in, &state->commit_index, error) ||
-            !ReadPod(in, &state->last_applied, error) ||
-            !ReadPod(in, first_log_index, error) ||
-            !ReadPod(in, last_log_index, error) ||
-            !ReadPod(in, log_count, error))
+        auto read_field = [&](const char *field_name, auto *target)
+        {
+          std::string field_error;
+          if (!ReadPod(in, target, &field_error))
+          {
+            if (error != nullptr)
+            {
+              *error = "read meta field failed: path=" + meta_path.string() +
+                       ", field=" + field_name + ", reason=" + field_error;
+            }
+            return false;
+          }
+          return true;
+        };
+        if (!read_field("magic", &magic) ||
+            !read_field("version", &version) ||
+            !read_field("current_term", &state->current_term) ||
+            !read_field("voted_for", &voted_for) ||
+            !read_field("commit_index", &state->commit_index) ||
+            !read_field("last_applied", &state->last_applied) ||
+            !read_field("first_log_index", first_log_index) ||
+            !read_field("last_log_index", last_log_index) ||
+            !read_field("log_count", log_count))
         {
           return false;
         }
@@ -766,7 +824,10 @@ namespace raftdemo
         {
           if (error != nullptr)
           {
-            *error = "invalid raft meta magic";
+            std::ostringstream oss;
+            oss << "invalid raft meta magic: path=" << meta_path.string()
+                << ", magic=" << magic;
+            *error = oss.str();
           }
           return false;
         }
@@ -774,7 +835,32 @@ namespace raftdemo
         {
           if (error != nullptr)
           {
-            *error = "unsupported raft meta version";
+            std::ostringstream oss;
+            oss << "unsupported raft meta version: path=" << meta_path.string()
+                << ", version=" << version;
+            *error = oss.str();
+          }
+          return false;
+        }
+        if (*log_count == 0)
+        {
+          if (*first_log_index != 0 || *last_log_index != 0)
+          {
+            if (error != nullptr)
+            {
+              *error = "meta log boundary invariant failed: " +
+                       DescribeMetaLogBoundary(meta_path, *first_log_index, *last_log_index, *log_count);
+            }
+            return false;
+          }
+        }
+        else if (*last_log_index < *first_log_index ||
+                 (*last_log_index - *first_log_index + 1) != *log_count)
+        {
+          if (error != nullptr)
+          {
+            *error = "meta log boundary invariant failed: " +
+                     DescribeMetaLogBoundary(meta_path, *first_log_index, *last_log_index, *log_count);
           }
           return false;
         }
@@ -892,16 +978,28 @@ namespace raftdemo
 
         records->reserve(static_cast<std::size_t>(expected_count));
         bool tail_truncated = false;
+        std::vector<std::string> recovery_diagnostics;
         for (const auto &[start_index, path] : files)
         {
           (void)start_index;
           if (tail_truncated)
           {
             // A previous segment had a bad tail. Later segments cannot be trusted.
+            std::string cleanup = "removed_later_segment=" + path.string();
             std::filesystem::remove(path, ec);
+            if (ec)
+            {
+              if (error != nullptr)
+              {
+                *error = cleanup + ", reason=" + ec.message();
+              }
+              return false;
+            }
+            recovery_diagnostics.push_back(std::move(cleanup));
             continue;
           }
-          if (!ReadSegmentFile(path, first_log_index, last_log_index, records, &tail_truncated, error))
+          if (!ReadSegmentFile(path, first_log_index, last_log_index, records,
+                               &tail_truncated, &recovery_diagnostics, error))
           {
             return false;
           }
@@ -912,7 +1010,21 @@ namespace raftdemo
           if (error != nullptr)
           {
             std::ostringstream oss;
-            oss << "log count mismatch, expected=" << expected_count << ", actual=" << records->size();
+            oss << "log count mismatch, log_dir=" << log_dir.string()
+                << ", expected_count=" << expected_count
+                << ", actual_count=" << records->size()
+                << ", expected_first=" << first_log_index
+                << ", expected_last=" << last_log_index;
+            if (!records->empty())
+            {
+              oss << ", actual_first=" << records->front().index
+                  << ", actual_last=" << records->back().index;
+            }
+            oss << ", segment_files=" << DescribeSegmentFiles(files);
+            for (const auto &diagnostic : recovery_diagnostics)
+            {
+              oss << ", " << diagnostic;
+            }
             *error = oss.str();
           }
           return false;
@@ -923,7 +1035,14 @@ namespace raftdemo
           {
             if (error != nullptr)
             {
-              *error = "log boundary mismatch while loading segments";
+              std::ostringstream oss;
+              oss << "log boundary mismatch while loading segments, log_dir=" << log_dir.string()
+                  << ", expected_first=" << first_log_index
+                  << ", expected_last=" << last_log_index
+                  << ", actual_first=" << records->front().index
+                  << ", actual_last=" << records->back().index
+                  << ", segment_files=" << DescribeSegmentFiles(files);
+              *error = oss.str();
             }
             return false;
           }
@@ -933,7 +1052,12 @@ namespace raftdemo
             {
               if (error != nullptr)
               {
-                *error = "non-contiguous log indexes while loading segments";
+                std::ostringstream oss;
+                oss << "non-contiguous log indexes while loading segments, log_dir="
+                    << log_dir.string() << ", previous_index=" << (*records)[i - 1].index
+                    << ", actual_index=" << (*records)[i].index
+                    << ", segment_files=" << DescribeSegmentFiles(files);
+                *error = oss.str();
               }
               return false;
             }
@@ -947,6 +1071,7 @@ namespace raftdemo
                            std::uint64_t last_log_index,
                            std::vector<LogRecord> *records,
                            bool *tail_truncated,
+                           std::vector<std::string> *recovery_diagnostics,
                            std::string *error)
       {
         std::ifstream in(path, std::ios::binary);
@@ -971,21 +1096,46 @@ namespace raftdemo
           }
           if (!in || in.gcount() != static_cast<std::streamsize>(sizeof(header)))
           {
+            const std::string reason = "partial segment entry header";
             if (!TruncateFile(path, last_good_pos, error))
             {
               return false;
             }
             *tail_truncated = true;
+            if (recovery_diagnostics != nullptr)
+            {
+              std::ostringstream oss;
+              oss << "segment tail truncated, path=" << path.string()
+                  << ", reason=" << reason
+                  << ", truncate_offset=" << last_good_pos
+                  << ", accepted_records=" << records->size();
+              recovery_diagnostics->push_back(oss.str());
+            }
             break;
           }
           if (header.magic != kSegmentMagic || header.version != kSegmentVersion ||
               header.type != kEntryTypeNormal || header.data_size > kMaxCommandBytes)
           {
+            std::ostringstream reason;
+            reason << "invalid segment entry header at offset=" << header_pos
+                   << ", magic=" << header.magic
+                   << ", version=" << header.version
+                   << ", type=" << header.type
+                   << ", data_size=" << header.data_size;
             if (!TruncateFile(path, last_good_pos, error))
             {
               return false;
             }
             *tail_truncated = true;
+            if (recovery_diagnostics != nullptr)
+            {
+              std::ostringstream oss;
+              oss << "segment tail truncated, path=" << path.string()
+                  << ", reason=" << reason.str()
+                  << ", truncate_offset=" << last_good_pos
+                  << ", accepted_records=" << records->size();
+              recovery_diagnostics->push_back(oss.str());
+            }
             break;
           }
 
@@ -996,11 +1146,21 @@ namespace raftdemo
             in.read(data.data(), static_cast<std::streamsize>(header.data_size));
             if (!in)
             {
+              const std::string reason = "partial segment entry payload";
               if (!TruncateFile(path, last_good_pos, error))
               {
                 return false;
               }
               *tail_truncated = true;
+              if (recovery_diagnostics != nullptr)
+              {
+                std::ostringstream oss;
+                oss << "segment tail truncated, path=" << path.string()
+                    << ", reason=" << reason
+                    << ", truncate_offset=" << last_good_pos
+                    << ", accepted_records=" << records->size();
+                recovery_diagnostics->push_back(oss.str());
+              }
               break;
             }
           }
@@ -1009,11 +1169,24 @@ namespace raftdemo
                                                              header.type, header.data_size, data);
           if (checksum != header.checksum)
           {
+            std::ostringstream reason;
+            reason << "segment checksum mismatch at index=" << header.index
+                   << ", expected=" << header.checksum
+                   << ", actual=" << checksum;
             if (!TruncateFile(path, last_good_pos, error))
             {
               return false;
             }
             *tail_truncated = true;
+            if (recovery_diagnostics != nullptr)
+            {
+              std::ostringstream oss;
+              oss << "segment tail truncated, path=" << path.string()
+                  << ", reason=" << reason.str()
+                  << ", truncate_offset=" << last_good_pos
+                  << ", accepted_records=" << records->size();
+              recovery_diagnostics->push_back(oss.str());
+            }
             break;
           }
 

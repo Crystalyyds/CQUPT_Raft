@@ -17,6 +17,7 @@
 #include "raft/common/config.h"
 #include "raft/common/propose.h"
 #include "raft/node/raft_node.h"
+#include "raft/storage/raft_storage.h"
 
 namespace raftdemo
 {
@@ -532,6 +533,50 @@ namespace raftdemo
       EXPECT_EQ(actual, "1");
       EXPECT_TRUE(restarted->DebugGetValue("hard_state_beta", &actual));
       EXPECT_EQ(actual, "2");
+    }
+
+    TEST(PersistenceTest, ColdRestartClampsCommitAndApplyBoundariesToLastLogIndex)
+    {
+      ScopedDataDir scoped_dir("test_recovery_boundary_clamp");
+
+      NodeConfig config;
+      config.node_id = 1;
+      config.address = "127.0.0.1:" + std::to_string(RandomBasePort());
+      config.election_timeout_min = std::chrono::milliseconds(250);
+      config.election_timeout_max = std::chrono::milliseconds(400);
+      config.heartbeat_interval = std::chrono::milliseconds(80);
+      config.rpc_deadline = std::chrono::milliseconds(500);
+      config.data_dir = (scoped_dir.path() / "raft_data" / "node_1").string();
+
+      PersistentRaftState persisted;
+      persisted.current_term = 3;
+      persisted.voted_for = 1;
+      persisted.commit_index = 99;
+      persisted.last_applied = 99;
+      for (std::uint64_t index = 1; index <= 3; ++index)
+      {
+        Command command;
+        command.type = CommandType::kSet;
+        command.key = "clamp_key_" + std::to_string(index);
+        command.value = "clamp_value_" + std::to_string(index);
+        persisted.log.push_back(LogRecord{index, 3, command.Serialize()});
+      }
+
+      std::string error;
+      auto storage = CreateFileRaftStorage(config.data_dir);
+      ASSERT_TRUE(storage->Save(persisted, &error)) << error;
+
+      const auto snapshot_config = BuildPersistenceSnapshotConfig(scoped_dir.path(), config.node_id);
+      auto restarted = std::make_shared<RaftNode>(config, snapshot_config);
+
+      const NodeStatusSnapshot status = restarted->GetStatusSnapshot();
+      EXPECT_EQ(status.commit_index, 3U) << restarted->Describe();
+      EXPECT_EQ(status.last_applied, 3U) << restarted->Describe();
+      EXPECT_EQ(status.last_log_index, 3U) << restarted->Describe();
+
+      std::string actual;
+      EXPECT_TRUE(restarted->DebugGetValue("clamp_key_3", &actual));
+      EXPECT_EQ(actual, "clamp_value_3");
     }
 
   } // namespace

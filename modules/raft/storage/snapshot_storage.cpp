@@ -688,6 +688,29 @@ namespace raftdemo
     }
     out->clear();
 
+    SnapshotListResult result;
+    if (!ListSnapshotsWithDiagnostics(&result, error))
+    {
+      return false;
+    }
+    *out = std::move(result.snapshots);
+    return true;
+  }
+
+  bool FileSnapshotStorage::ListSnapshotsWithDiagnostics(SnapshotListResult *out,
+                                                         std::string *error)
+  {
+    if (out == nullptr)
+    {
+      if (error != nullptr)
+      {
+        *error = "snapshot list result must not be null";
+      }
+      return false;
+    }
+    out->snapshots.clear();
+    out->validation_issues.clear();
+
     std::error_code ec;
     if (!std::filesystem::exists(snapshot_dir_, ec))
     {
@@ -710,15 +733,24 @@ namespace raftdemo
       if (entry.is_directory())
       {
         const std::string name = entry.path().filename().string();
+        if (StartsWith(name, kSnapshotStagingPrefix))
+        {
+          out->validation_issues.push_back(
+              SnapshotValidationIssue{entry.path().string(),
+                                      "staging snapshot directory ignored"});
+          continue;
+        }
         if (!StartsWith(name, kSnapshotPrefix))
         {
           continue;
         }
         if (!ReadDirectorySnapshot(entry.path(), &meta, &local_error))
         {
+          out->validation_issues.push_back(
+              SnapshotValidationIssue{entry.path().string(), local_error});
           continue;
         }
-        out->push_back(std::move(meta));
+        out->snapshots.push_back(std::move(meta));
         continue;
       }
 
@@ -728,13 +760,15 @@ namespace raftdemo
       {
         if (!ReadLegacyFlatSnapshot(entry.path(), &meta, &local_error))
         {
+          out->validation_issues.push_back(
+              SnapshotValidationIssue{entry.path().string(), local_error});
           continue;
         }
-        out->push_back(std::move(meta));
+        out->snapshots.push_back(std::move(meta));
       }
     }
 
-    std::sort(out->begin(), out->end(), [](const SnapshotMeta &a, const SnapshotMeta &b)
+    std::sort(out->snapshots.begin(), out->snapshots.end(), [](const SnapshotMeta &a, const SnapshotMeta &b)
               {
       if (a.last_included_index != b.last_included_index) {
         return a.last_included_index > b.last_included_index;
@@ -758,10 +792,12 @@ namespace raftdemo
     *has_snapshot = false;
 
     std::vector<SnapshotMeta> snapshots;
-    if (!ListSnapshots(&snapshots, error))
+    SnapshotListResult result;
+    if (!ListSnapshotsWithDiagnostics(&result, error))
     {
       return false;
     }
+    snapshots = std::move(result.snapshots);
     if (snapshots.empty())
     {
       return true;
@@ -941,7 +977,10 @@ namespace raftdemo
     {
       if (error != nullptr)
       {
-        *error = "invalid snapshot meta header";
+        std::ostringstream oss;
+        oss << "invalid snapshot meta header: path=" << meta_path.string()
+            << ", magic=" << magic << ", version=" << version;
+        *error = oss.str();
       }
       return false;
     }
@@ -949,7 +988,7 @@ namespace raftdemo
     {
       if (error != nullptr)
       {
-        *error = "snapshot data file name is empty";
+        *error = "snapshot data file name is empty: meta_path=" + meta_path.string();
       }
       return false;
     }
@@ -965,7 +1004,11 @@ namespace raftdemo
         {
           if (error != nullptr)
           {
-            *error = "snapshot directory index does not match meta";
+            std::ostringstream oss;
+            oss << "snapshot directory index does not match meta: snapshot_dir="
+                << snapshot_dir.string() << ", dir_index=" << dir_index
+                << ", meta_index=" << last_included_index;
+            *error = oss.str();
           }
           return false;
         }
@@ -974,7 +1017,7 @@ namespace raftdemo
       {
         if (error != nullptr)
         {
-          *error = "invalid snapshot directory index";
+          *error = "invalid snapshot directory index: snapshot_dir=" + snapshot_dir.string();
         }
         return false;
       }
@@ -1000,7 +1043,10 @@ namespace raftdemo
     {
       if (error != nullptr)
       {
-        *error = "snapshot checksum mismatch";
+        std::ostringstream oss;
+        oss << "snapshot checksum mismatch: data_path=" << data_path.string()
+            << ", expected=" << checksum << ", actual=" << actual_checksum;
+        *error = oss.str();
       }
       return false;
     }

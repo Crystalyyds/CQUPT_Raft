@@ -73,3 +73,61 @@
 - [x] T421 更新 `progress.md`
 - [x] T422 更新 `decisions.md`
 - [x] T423 生成 `specs/003-persistence-reliability/phase-reports/phase-4-snapshot-atomic-publish.md`
+
+## Phase 5A Checklist
+
+- [x] T501 梳理 restart recovery 整体调用链：`storage_->Load`、`LoadLatestSnapshotOnStartup`、`ApplyCommittedEntries`
+- [x] T502 梳理 `meta.bin` 加载、校验、失败处理与诊断现状
+- [x] T503 梳理 segment log 加载、校验、tail truncate、后续 segment 清理与诊断现状
+- [x] T504 梳理 snapshot 枚举、校验、选择、加载、skip/fallback 与诊断现状
+- [x] T505 梳理 meta / log / snapshot 之间的 trusted-state 边界关系
+- [x] T506 梳理 recovery 后 `commit_index`、`last_applied`、`last_snapshot_index`、`last_snapshot_term` 的设置与一致性风险
+- [x] T507 梳理 restart recovery 相关测试覆盖与缺口
+- [x] T508 规划 Phase 5B 受影响文件与测试范围
+- [x] T509 更新 `progress.md` 与 `decisions.md`
+- [x] T510 生成 `specs/003-persistence-reliability/phase-reports/phase-5a-restart-recovery-diagnostics-plan.md`
+
+## Phase 5B Checklist
+
+- [x] T511 为 `ReadMeta` / `LoadSegmented` / `LoadSegments` 增加 path、字段名、meta boundary 与 segment boundary 诊断上下文
+- [x] T512 明确并测试 `meta.bin` 的 log boundary invariant：`log_count`、`first_log_index`、`last_log_index` 与实际 segment 内容必须一致
+- [x] T513 为 segment tail corruption truncate 增加诊断：原因、segment path、truncate offset、保留记录数与被清理的后续 segment
+- [x] T514 为 snapshot catalog validation 暴露 skip reason，覆盖缺失 meta、缺失 data、checksum mismatch、temp/staging 目录忽略等场景
+- [x] T515 为 startup snapshot recovery 增加诊断：候选数量、被跳过 snapshot、最终选择 snapshot、无可用 snapshot 或全部无效 snapshot 的结果
+- [x] T516 增加 recovery 后状态摘要与一致性校验诊断：`commit_index`、`last_applied`、`last_snapshot_index`、`last_snapshot_term`、last log index、replay range
+- [x] T517 补充 meta 缺失、损坏、unsupported version、boundary 不一致、commit/applied 越界 clamp 的 restart recovery 测试
+- [x] T518 补充 snapshot 缺失、损坏、不完整、temp 目录残留、全部 invalid、最新 invalid 回退旧 valid 的诊断测试
+- [x] T519 补充 segment tail truncate 诊断与后续 segment 清理测试
+- [x] T520 检查并稳定 snapshot restart recovery 相关测试，不删除、不跳过失败测试
+- [x] T521 运行 persistence / segment storage / snapshot restart / snapshot diagnosis 相关测试
+- [x] T522 更新 `progress.md`
+- [x] T523 更新 `decisions.md`
+- [x] T524 生成 `specs/003-persistence-reliability/phase-reports/phase-5-restart-recovery-diagnostics.md`
+
+## Phase 6A Checklist
+
+- [x] T601 分析当前 persistence / snapshot / restart recovery 测试覆盖
+- [x] T602 识别 `meta.bin`、segment log、snapshot publish 和 restart recovery 的关键 crash window
+- [x] T603 区分可通过坏文件 / 坏目录构造完成的测试场景
+- [x] T604 区分必须依赖 test-only failure injection 的测试场景
+- [x] T605 识别 fsync、directory fsync、rename / replace、remove / prune、partial write 失败模拟缺口
+- [x] T606 判断是否需要新增 crash matrix 文档或章节
+- [x] T607 规划 Phase 6B 最小测试实现范围
+- [x] T608 更新 `progress.md` 与 `decisions.md`
+- [x] T609 生成 `specs/003-persistence-reliability/phase-reports/phase-6a-crash-failure-injection-plan.md`
+
+## Phase 6B Checklist
+
+- [x] T610 新增或更新 crash matrix 文档，映射对象、操作、crash point、预期恢复行为、测试方式和对应测试文件 `covered-in-phase-report`
+- [x] T611 补充文件 / 目录构造类测试：残留 `meta.bin.tmp`、`log.tmp/`、`log.bak/`、旧 meta + 新 log、新 meta + 旧 log、缺失 segment、额外 segment `partial: no new missing/extra segment test because existing boundary/count tests already cover invalid segment sets`
+- [x] T612 补充 snapshot 文件 / 目录构造类测试：残留 `.snapshot_staging_*`、缺失 data、缺失 meta、checksum mismatch、全部 invalid snapshot、最新 invalid 回退旧 valid
+- [ ] T613 设计最小 test-only failure injection helper，用于 storage 持久化路径中的 sync、rename / replace、remove / prune、write / copy failure `deferred: not introduced in Phase 6B because it requires production hook surface`
+- [ ] T614 补充 segment log failure injection 测试：`WriteSegments` file sync 失败、`ReplaceDirectory` publish / cleanup / directory sync 失败、失败后重启只接受可信 `log/` `deferred: exact fsync / rename failure needs test-only hook`
+- [ ] T615 补充 `meta.bin` failure injection 测试：`WriteMeta` file sync 失败、`ReplaceFile` publish / directory sync 失败、失败后 restart recovery 不信任部分发布状态 `deferred: exact fsync / rename failure needs test-only hook`
+- [ ] T616 补充 snapshot failure injection 测试：staging data/meta sync 失败、staging dir sync 失败、publish rename 失败、parent directory sync 失败、prune 删除 / sync 失败 `deferred: exact sync / rename / prune failure needs test-only hook`
+- [x] T617 补充 restart recovery crash-point 测试：验证每个 crash window 后只能恢复旧完整状态或新完整状态，不能接受部分发布对象
+- [x] T618 确认 failure injection 默认关闭，不改变生产路径语义、持久化格式、Raft 协议、KV 逻辑或公共 API 行为
+- [x] T619 运行 persistence / segment storage / snapshot reliability / snapshot restart / snapshot diagnosis 相关测试
+- [x] T620 更新 `progress.md`
+- [x] T621 更新 `decisions.md`
+- [x] T622 生成 `specs/003-persistence-reliability/phase-reports/phase-6-crash-failure-injection-tests.md`

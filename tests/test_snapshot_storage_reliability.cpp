@@ -53,6 +53,14 @@ std::string ReadTextFile(const std::filesystem::path& path) {
   return buffer.str();
 }
 
+std::string JoinIssueReasons(const std::vector<SnapshotValidationIssue>& issues) {
+  std::ostringstream oss;
+  for (const auto& issue : issues) {
+    oss << issue.path << ": " << issue.reason << "\n";
+  }
+  return oss.str();
+}
+
 std::size_t CountSnapshotDirs(const std::filesystem::path& dir) {
   std::size_t count = 0;
   std::error_code ec;
@@ -170,6 +178,33 @@ TEST_F(SnapshotStorageReliabilityTest, IgnoresStagingAndIncompleteSnapshotDirect
   EXPECT_EQ(loaded.last_included_index, old_meta.last_included_index);
 }
 
+TEST_F(SnapshotStorageReliabilityTest, ReportsValidationIssuesForSkippedSnapshotEntries) {
+  SnapshotMeta old_meta = SaveSnapshot(10, 1, "valid-snapshot-10");
+  SnapshotMeta missing_data_meta = SaveSnapshot(30, 3, "valid-snapshot-30");
+  SnapshotMeta corrupted_meta = SaveSnapshot(40, 4, "valid-snapshot-40");
+
+  WriteTextFile(snapshot_dir_ / ".snapshot_staging_00000000000000000050_1" / "data.bin",
+                "staged-but-not-published");
+  WriteTextFile(snapshot_dir_ / "snapshot_00000000000000000020" / "data.bin",
+                "missing-meta");
+  ASSERT_TRUE(std::filesystem::remove(missing_data_meta.snapshot_path))
+      << missing_data_meta.snapshot_path;
+  WriteTextFile(corrupted_meta.snapshot_path, "corrupted-new-snapshot");
+
+  SnapshotListResult result;
+  std::string error;
+  ASSERT_TRUE(storage_->ListSnapshotsWithDiagnostics(&result, &error)) << error;
+
+  ASSERT_EQ(result.snapshots.size(), 1U);
+  EXPECT_EQ(result.snapshots.front().last_included_index, old_meta.last_included_index);
+
+  const std::string reasons = JoinIssueReasons(result.validation_issues);
+  EXPECT_NE(reasons.find("staging snapshot directory ignored"), std::string::npos) << reasons;
+  EXPECT_NE(reasons.find("open snapshot meta file failed"), std::string::npos) << reasons;
+  EXPECT_NE(reasons.find("snapshot data file missing"), std::string::npos) << reasons;
+  EXPECT_NE(reasons.find("snapshot checksum mismatch"), std::string::npos) << reasons;
+}
+
 TEST_F(SnapshotStorageReliabilityTest, FallsBackToOlderSnapshotWhenNewestIsCorrupted) {
   SnapshotMeta old_meta = SaveSnapshot(10, 1, "valid-snapshot-10");
   SnapshotMeta new_meta = SaveSnapshot(20, 2, "valid-snapshot-20");
@@ -184,6 +219,35 @@ TEST_F(SnapshotStorageReliabilityTest, FallsBackToOlderSnapshotWhenNewestIsCorru
   EXPECT_EQ(loaded.last_included_index, old_meta.last_included_index);
   EXPECT_EQ(loaded.last_included_term, old_meta.last_included_term);
   EXPECT_EQ(std::filesystem::path(loaded.snapshot_path).filename().string(), "data.bin");
+}
+
+TEST_F(SnapshotStorageReliabilityTest, AllInvalidSnapshotsReturnNoTrustedSnapshotWithDiagnostics) {
+  SnapshotMeta missing_data_meta = SaveSnapshot(20, 2, "valid-snapshot-20");
+  SnapshotMeta corrupted_meta = SaveSnapshot(30, 3, "valid-snapshot-30");
+
+  WriteTextFile(snapshot_dir_ / ".snapshot_staging_00000000000000000040_1" / "data.bin",
+                "staged-but-not-published");
+  WriteTextFile(snapshot_dir_ / "snapshot_00000000000000000010" / "data.bin",
+                "missing-meta");
+  ASSERT_TRUE(std::filesystem::remove(missing_data_meta.snapshot_path))
+      << missing_data_meta.snapshot_path;
+  WriteTextFile(corrupted_meta.snapshot_path, "corrupted-only-snapshot");
+
+  SnapshotListResult result;
+  std::string error;
+  ASSERT_TRUE(storage_->ListSnapshotsWithDiagnostics(&result, &error)) << error;
+  EXPECT_TRUE(result.snapshots.empty());
+
+  const std::string reasons = JoinIssueReasons(result.validation_issues);
+  EXPECT_NE(reasons.find("staging snapshot directory ignored"), std::string::npos) << reasons;
+  EXPECT_NE(reasons.find("open snapshot meta file failed"), std::string::npos) << reasons;
+  EXPECT_NE(reasons.find("snapshot data file missing"), std::string::npos) << reasons;
+  EXPECT_NE(reasons.find("snapshot checksum mismatch"), std::string::npos) << reasons;
+
+  SnapshotMeta loaded;
+  bool has_snapshot = true;
+  ASSERT_TRUE(storage_->LoadLatestValidSnapshot(&loaded, &has_snapshot, &error)) << error;
+  EXPECT_FALSE(has_snapshot);
 }
 
 TEST_F(SnapshotStorageReliabilityTest, SameIndexSameTermSaveIsIdempotent) {

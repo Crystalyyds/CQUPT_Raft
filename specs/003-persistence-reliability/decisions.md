@@ -178,3 +178,99 @@ Phase 2 中 segment log durability 实现引入了 POSIX fsync 语义，但 Wind
 - Decision: Phase 4B Windows snapshot flush 路径沿用 `FlushFileBuffers` 与 directory handle 方案，运行时语义未在 Windows 环境验证
 - Status: Accepted
 - Reason: 本轮执行环境是 POSIX/Linux；Windows 分支没有 no-op success，失败会返回错误，但没有 Windows 实机或 CI 结果，必须继续标记为未验证
+
+## D029
+
+- Decision: Phase 5 拆分为 `Phase 5A` 分析与任务生成，以及 `Phase 5B` 最小实现
+- Status: Accepted
+- Reason: restart recovery 同时跨 `meta.bin`、segment log、snapshot catalog、state machine load 和 node startup replay；先固定 current behavior、trusted-state 边界和诊断缺口，再实现校验与诊断，避免直接改动高风险恢复路径
+
+## D030
+
+- Decision: Phase 5B 不修改持久化格式，只补 recovery 校验、诊断上下文和测试
+- Status: Accepted
+- Reason: 当前缺口集中在恢复时的可解释性、边界一致性诊断和测试覆盖；不需要改变 `meta.bin`、segment log、snapshot data 或 snapshot metadata 的编码格式
+
+## D031
+
+- Decision: Phase 5B 默认保持现有 recovery 语义：meta/log 必须一致，坏 segment tail 可截断，snapshot 最新有效优先且无效回退，snapshot 加载后 replay committed tail log
+- Status: Accepted
+- Reason: Phase 5 的目标是 validation and diagnostics，不是重写恢复策略；只有测试证明存在正确性 bug 时，才允许在 Phase 5 范围内做最小行为修正并记录原因
+
+## D032
+
+- Decision: Phase 5B 需要暴露 snapshot skip reason，但不把 invalid snapshot 变成 fatal error
+- Status: Accepted
+- Reason: 当前 contract 明确允许跳过无效 snapshot 并回退到更旧有效 snapshot；Phase 5B 应让“为什么跳过”和“为什么选择”可诊断，而不是改变 trusted snapshot 选择语义
+
+## D033
+
+- Decision: 已观察到的 `RaftSnapshotRecoveryTest.SavesSnapshotAndRestoresAfterRestart` 稳定性问题归入 Phase 5B 测试诊断范围，不通过删除或跳过测试处理
+- Status: Accepted
+- Reason: 该测试属于 snapshot restart recovery 可观测面；Phase 5B 应检查失败原因、补足诊断或稳定测试前置条件，不能用跳过失败测试规避恢复路径问题
+
+## D034
+
+- Decision: Phase 5B 为 `ISnapshotStorage` 增加 `ListSnapshotsWithDiagnostics`，用于暴露 snapshot catalog skip reason
+- Status: Accepted
+- Reason: node startup 只能通过 snapshot storage 接口观察 trusted snapshot candidates；如果不在 storage 接口暴露 validation issues，startup recovery 无法解释缺失 meta、缺失 data、checksum mismatch 或 staging 目录为什么没有成为可信 snapshot
+
+## D035
+
+- Decision: Phase 5B 只增强 recovery 校验和诊断，不修改已有 fsync / publish 语义
+- Status: Accepted
+- Reason: Phase 2-4 已分别处理 segment log、meta hard state 和 snapshot atomic publish 的 durability barrier；Phase 5B 聚焦 recovery 可解释性和 trusted-state validation，避免把诊断工作扩大成新的 durability 实现阶段
+
+## D036
+
+- Decision: Phase 5B 保持 invalid snapshot 非 fatal 的恢复语义
+- Status: Accepted
+- Reason: 当前 durability contract 要求 snapshot 最新有效优先、无效跳过并允许回退旧有效 snapshot；新增 skip reason 只提升诊断能力，不改变恢复选择策略
+
+## D037
+
+- Decision: Phase 6 拆分为 `Phase 6A` 分析与任务生成，以及 `Phase 6B` crash / failure injection 测试最小实现
+- Status: Accepted
+- Reason: crash / failure injection 会跨 meta、segment log、snapshot publish 和 restart recovery；先固定 crash window、已有覆盖和注入缺口，可以避免直接引入过宽测试框架或误改业务代码
+
+## D038
+
+- Decision: Phase 6B 先补文件 / 目录构造类测试，再为无法构造的中间失败点引入 test-only failure injection
+- Status: Accepted
+- Reason: 现有测试已经能通过坏文件和坏目录验证部分 trusted-state 判定；只有 fsync、directory fsync、rename / replace、remove / prune、partial write 等精确中间失败无法靠文件构造稳定覆盖
+
+## D039
+
+- Decision: Phase 6B 的 failure injection 必须默认关闭，且不得改变生产路径语义、持久化格式、Raft 协议或 KV 行为
+- Status: Accepted
+- Reason: Phase 6 的目标是验证 crash / failure 窗口，不是新增运行时功能；注入点只能作为测试可观测性手段，不能成为新的持久化协议或磁盘格式
+
+## D040
+
+- Decision: Phase 6B 需要新增或更新 crash matrix 文档
+- Status: Accepted
+- Reason: meta、segment log、snapshot publish 和 restart recovery 的 crash window 数量已经超过单个测试文件能直观看清的范围；用矩阵映射对象、操作、crash point、预期恢复行为和测试方式，能防止遗漏关键窗口
+
+## D041
+
+- Decision: 注入的 durability failure 必须以错误形式暴露，不能用 no-op success 模拟
+- Status: Accepted
+- Reason: 根 `AGENTS.md` 和 storage 模块规则明确禁止 required durability operations 静默降级；Phase 6 的测试必须验证失败传播和可信状态判定，而不是把失败路径伪装成成功
+
+## D042
+
+- Decision: Phase 6B 不修改生产 `.h` / `.cpp`，只补充文件 / 目录构造类 crash artifact 测试
+- Status: Accepted
+- Reason: 用户要求优先通过坏文件、坏目录、temp 残留和 checksum 损坏模拟 crash / power loss 近似场景；当前最小测试增量可以在现有测试文件内完成，不需要为了 Phase 6B 扩大到生产代码 hook
+
+## D043
+
+- Decision: 精确 `fsync`、directory `fsync`、rename / replace、remove / prune、partial write failure injection 推迟到后续明确批准的 test-only hook 阶段
+- Status: Accepted
+- Reason: 这些失败点无法仅靠文件构造稳定模拟；若要覆盖，需要在 storage 持久化路径加入测试专用注入点。Phase 6B 不擅自修改生产代码，因此将 T613-T616 标记为 deferred，而不是用不可靠的平台权限技巧或 no-op success 伪造覆盖
+
+## D044
+
+- Decision: Phase 6B 的 crash matrix 放入阶段报告，不新增独立 `crash-matrix.md`
+- Status: Accepted
+- Reason: 当前允许修改的 spec 文件不包括新的 crash matrix 文档；将矩阵写入阶段报告可以满足覆盖映射需求，同时避免扩大文档文件范围

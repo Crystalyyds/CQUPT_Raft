@@ -30,6 +30,16 @@ struct SnapshotMeta {
   std::uint32_t data_checksum{0};
 };
 
+struct SnapshotValidationIssue {
+  std::string path;
+  std::string reason;
+};
+
+struct SnapshotListResult {
+  std::vector<SnapshotMeta> snapshots;
+  std::vector<SnapshotValidationIssue> validation_issues;
+};
+
 class ISnapshotStorage {
  public:
   virtual ~ISnapshotStorage() = default;
@@ -46,6 +56,10 @@ class ISnapshotStorage {
   // List valid snapshots, newest/highest-index first. Corrupted snapshots are ignored.
   virtual bool ListSnapshots(std::vector<SnapshotMeta>* out,
                              std::string* error) = 0;
+
+  // List valid snapshots and report why snapshot-like entries were not trusted.
+  virtual bool ListSnapshotsWithDiagnostics(SnapshotListResult* out,
+                                            std::string* error) = 0;
 
   virtual bool LoadLatestValidSnapshot(SnapshotMeta* out_meta,
                                        bool* has_snapshot,
@@ -69,6 +83,9 @@ class FileSnapshotStorage final : public ISnapshotStorage {
 
   bool ListSnapshots(std::vector<SnapshotMeta>* out,
                      std::string* error) override;
+
+  bool ListSnapshotsWithDiagnostics(SnapshotListResult* out,
+                                    std::string* error) override;
 
   bool LoadLatestValidSnapshot(SnapshotMeta* out_meta,
                                bool* has_snapshot,

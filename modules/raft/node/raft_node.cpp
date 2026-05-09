@@ -160,9 +160,14 @@ namespace raftdemo
         last_snapshot_term_ = log_.front().term;
       }
 
-      if (commit_index_ > LastLogIndexLocked())
+      const std::uint64_t loaded_last_log_index = LastLogIndexLocked();
+      if (commit_index_ > loaded_last_log_index)
       {
-        commit_index_ = LastLogIndexLocked();
+        Log(NodeTag(config_.node_id),
+            "clamp persisted commit boundary during restart recovery, persisted_commit_index=",
+            commit_index_, ", persisted_last_applied=", persistent_state.last_applied,
+            ", last_log_index=", loaded_last_log_index);
+        commit_index_ = loaded_last_log_index;
       }
 
       Log(NodeTag(config_.node_id), "loaded persisted state from ", storage_->DataDir(),
@@ -193,9 +198,22 @@ namespace raftdemo
       if (!replay_result.Ok)
       {
         throw std::runtime_error("failed to replay committed log entries for node " +
-                                 std::to_string(config_.node_id) + ": " + replay_result.message);
+                                 std::to_string(config_.node_id) + ": " + replay_result.message +
+                                 ", commit_index=" + std::to_string(commit_index_) +
+                                 ", last_applied=" + std::to_string(last_applied_) +
+                                 ", last_snapshot_index=" + std::to_string(last_snapshot_index_) +
+                                 ", last_snapshot_term=" + std::to_string(last_snapshot_term_) +
+                                 ", last_log_index=" + std::to_string(LastLogIndexLocked()));
       }
     }
+    Log(NodeTag(config_.node_id),
+        "restart recovery complete, has_persisted_state=", has_state,
+        ", term=", current_term_, ", voted_for=", voted_for_,
+        ", commit_index=", commit_index_, ", last_applied=", last_applied_,
+        ", last_snapshot_index=", last_snapshot_index_,
+        ", last_snapshot_term=", last_snapshot_term_,
+        ", first_log_index=", FirstLogIndexLocked(),
+        ", last_log_index=", LastLogIndexLocked());
   }
 
   RaftNode::~RaftNode() { Stop(); }
@@ -2198,13 +2216,27 @@ RaftNode::ReplicationOutcome RaftNode::ReplicateLogEntryToMajority(std::uint64_t
 
         if (!HasLogAtIndexLocked(apply_index))
         {
-          return {false, "apply index out of range"};
+          std::ostringstream oss;
+          oss << "apply index out of range, apply_index=" << apply_index
+              << ", commit_index=" << commit_index_
+              << ", last_applied=" << last_applied_
+              << ", last_snapshot_index=" << last_snapshot_index_
+              << ", first_log_index=" << FirstLogIndexLocked()
+              << ", last_log_index=" << LastLogIndexLocked();
+          return {false, oss.str()};
         }
 
         const LogRecord *record = LogAtIndexLocked(apply_index);
         if (record == nullptr)
         {
-          return {false, "apply log record is missing"};
+          std::ostringstream oss;
+          oss << "apply log record is missing, apply_index=" << apply_index
+              << ", commit_index=" << commit_index_
+              << ", last_applied=" << last_applied_
+              << ", last_snapshot_index=" << last_snapshot_index_
+              << ", first_log_index=" << FirstLogIndexLocked()
+              << ", last_log_index=" << LastLogIndexLocked();
+          return {false, oss.str()};
         }
 
         command_data = record->command;
@@ -2305,9 +2337,9 @@ RaftNode::ReplicationOutcome RaftNode::ReplicateLogEntryToMajority(std::uint64_t
       return true;
     }
 
-    std::vector<SnapshotMeta> snapshots;
+    SnapshotListResult snapshot_result;
     std::string list_error;
-    if (!snapshot_storage_->ListSnapshots(&snapshots, &list_error))
+    if (!snapshot_storage_->ListSnapshotsWithDiagnostics(&snapshot_result, &list_error))
     {
       if (reason != nullptr)
       {
@@ -2316,12 +2348,26 @@ RaftNode::ReplicationOutcome RaftNode::ReplicateLogEntryToMajority(std::uint64_t
       return false;
     }
 
+    const auto &snapshots = snapshot_result.snapshots;
+    Log(NodeTag(config_.node_id),
+        "startup snapshot recovery scan, snapshot_dir=", snapshot_storage_->SnapshotDir(),
+        ", valid_candidates=", snapshots.size(),
+        ", skipped_catalog_entries=", snapshot_result.validation_issues.size());
+    for (const auto &issue : snapshot_result.validation_issues)
+    {
+      Log(NodeTag(config_.node_id),
+          "skip snapshot catalog entry during startup recovery, path=", issue.path,
+          ", reason=", issue.reason);
+    }
+
     for (const auto &meta : snapshots)
     {
       SnapshotResult load_result = state_machine_->LoadSnapshot(meta.snapshot_path);
       if (!load_result.Ok())
       {
         Log(NodeTag(config_.node_id), "skip invalid snapshot ", meta.snapshot_path,
+            ", index=", meta.last_included_index,
+            ", term=", meta.last_included_term,
             ", reason=", load_result.message);
         continue;
       }
@@ -2344,10 +2390,22 @@ RaftNode::ReplicationOutcome RaftNode::ReplicateLogEntryToMajority(std::uint64_t
       }
 
       Log(NodeTag(config_.node_id), "loaded snapshot from ", meta.snapshot_path,
-          ", index=", meta.last_included_index, ", term=", meta.last_included_term);
+          ", index=", meta.last_included_index, ", term=", meta.last_included_term,
+          ", commit_index=", commit_index_, ", last_applied=", last_applied_,
+          ", last_snapshot_index=", last_snapshot_index_,
+          ", last_snapshot_term=", last_snapshot_term_,
+          ", last_log_index=", LastLogIndexLocked());
       return true;
     }
 
+    Log(NodeTag(config_.node_id),
+        "no startup snapshot loaded, valid_candidates=", snapshots.size(),
+        ", skipped_catalog_entries=", snapshot_result.validation_issues.size(),
+        ", commit_index=", commit_index_,
+        ", last_applied=", last_applied_,
+        ", last_snapshot_index=", last_snapshot_index_,
+        ", last_snapshot_term=", last_snapshot_term_,
+        ", last_log_index=", LastLogIndexLocked());
     return true;
   }
 
