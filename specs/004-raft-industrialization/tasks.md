@@ -55,7 +55,7 @@
 
 **⚠️ CRITICAL**: 本阶段不完成，US1 的高风险回归与 durability 任务不应关闭。
 
-- [ ] T003 Add deterministic diagnosis for `RaftSnapshotRecoveryTest` in `tests/test_raft_snapshot_restart.cpp`
+- [x] T003 Add deterministic diagnosis for `RaftSnapshotRecoveryTest` in `tests/test_raft_snapshot_restart.cpp`
   Goal: 分析并稳定 `RaftSnapshotRecoveryTest.SavesSnapshotAndRestoresAfterRestart` 的时序假设，不放宽 snapshot/restart 断言。
   Input: `tests/test_raft_snapshot_restart.cpp`, `specs/003-persistence-reliability/progress.md`, `validation-matrix.md`.
   Scope: 只改 `tests/test_raft_snapshot_restart.cpp`；必要时可增加文件内测试辅助逻辑，但不改业务行为。
@@ -66,7 +66,9 @@
   Linux-Specific: Yes, 当前 blocker 来源于 Linux 主验收。
   Windows/macOS Fallback: Yes, 用 `ctest --preset debug-tests` 作为平台无关回归入口，不要求同等时序证据。
   Basis: `specs/003-persistence-reliability/progress.md` Blocked 中的 `RaftSnapshotRecoveryTest...` flaky；`plan.md` W1。
-  Tests To Run: `ctest --test-dir build --output-on-failure -R '^RaftSnapshotRecoveryTest\.'`; `./test.sh --group snapshot-recovery`.
+  Tests To Run: `CTEST_PARALLEL_LEVEL=1 ctest --test-dir build --output-on-failure -R '^RaftSnapshotRecoveryTest\.SavesSnapshotAndRestoresAfterRestart$'`
+  Result: `Passed`, `1/1 tests passed`
+  Execution Note: 实际命中的测试定义位于 `tests/snapshot_test.cpp`；本次未修改生产代码。
 
 - [ ] T004 Add deterministic diagnosis for `RaftSplitBrainTest` in `tests/test_raft_split_brain.cpp`
   Goal: 稳定 `RaftSplitBrainTest.MinorityLeaderTimesOutAndDoesNotApplyUncommittedCommand` 的 leader election timing 路径，不弱化 split-brain 断言。

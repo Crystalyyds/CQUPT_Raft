@@ -5,6 +5,8 @@
 #include <cstdint>
 #include <filesystem>
 #include <memory>
+#include <optional>
+#include <sstream>
 #include <string>
 #include <thread>
 #include <utility>
@@ -203,6 +205,104 @@ namespace raftdemo
             return node != nullptr && node->Describe().find("role=Leader") != std::string::npos;
         }
 
+        std::string DescribeCluster(const std::vector<std::shared_ptr<RaftNode>> &nodes)
+        {
+            std::ostringstream oss;
+            for (std::size_t i = 0; i < nodes.size(); ++i)
+            {
+                if (i != 0)
+                {
+                    oss << " | ";
+                }
+                oss << "node[" << i << "]=";
+                if (!nodes[i])
+                {
+                    oss << "null";
+                }
+                else
+                {
+                    oss << nodes[i]->Describe();
+                }
+            }
+            return oss.str();
+        }
+
+        struct StableLeaderObservation
+        {
+            std::shared_ptr<RaftNode> leader;
+            std::size_t leader_index{0};
+            int stable_observations{0};
+            std::string diagnostics;
+        };
+
+        std::optional<StableLeaderObservation> WaitForStableLeader(
+            const std::vector<std::shared_ptr<RaftNode>> &nodes,
+            std::chrono::milliseconds timeout,
+            int required_observations = 3)
+        {
+            const auto deadline = std::chrono::steady_clock::now() + timeout;
+            std::size_t last_leader_index = nodes.size();
+            int stable_observations = 0;
+            int last_leader_count = 0;
+            std::string last_cluster_state;
+
+            while (std::chrono::steady_clock::now() < deadline)
+            {
+                std::shared_ptr<RaftNode> leader;
+                std::size_t leader_index = nodes.size();
+                int leader_count = 0;
+
+                for (std::size_t i = 0; i < nodes.size(); ++i)
+                {
+                    if (IsLeaderNode(nodes[i]))
+                    {
+                        leader = nodes[i];
+                        leader_index = i;
+                        ++leader_count;
+                    }
+                }
+
+                last_leader_count = leader_count;
+                last_cluster_state = DescribeCluster(nodes);
+
+                if (leader_count == 1)
+                {
+                    if (leader_index == last_leader_index)
+                    {
+                        ++stable_observations;
+                    }
+                    else
+                    {
+                        last_leader_index = leader_index;
+                        stable_observations = 1;
+                    }
+
+                    if (stable_observations >= required_observations)
+                    {
+                        StableLeaderObservation observation;
+                        observation.leader = leader;
+                        observation.leader_index = leader_index;
+                        observation.stable_observations = stable_observations;
+                        observation.diagnostics =
+                            "stable leader_index=" + std::to_string(leader_index) +
+                            ", observations=" + std::to_string(stable_observations) +
+                            ", leader=" + leader->Describe() +
+                            ", cluster=" + last_cluster_state;
+                        return observation;
+                    }
+                }
+                else
+                {
+                    last_leader_index = nodes.size();
+                    stable_observations = 0;
+                }
+
+                std::this_thread::sleep_for(50ms);
+            }
+
+            return std::nullopt;
+        }
+
         std::shared_ptr<RaftNode> WaitForLeader(const std::vector<std::shared_ptr<RaftNode>> &nodes,
                                                 std::chrono::milliseconds timeout)
         {
@@ -224,26 +324,49 @@ namespace raftdemo
         bool WaitForValueOnAllNodes(const std::vector<std::shared_ptr<RaftNode>> &nodes,
                                     const std::string &key,
                                     const std::string &expected_value,
-                                    std::chrono::milliseconds timeout)
+                                    std::chrono::milliseconds timeout,
+                                    std::string *diagnostics = nullptr)
         {
             const auto deadline = std::chrono::steady_clock::now() + timeout;
+            std::string last_values;
             while (std::chrono::steady_clock::now() < deadline)
             {
                 bool ok = true;
+                std::ostringstream values;
                 for (const auto &node : nodes)
                 {
                     std::string value;
+                    if (values.tellp() > 0)
+                    {
+                        values << " | ";
+                    }
                     if (!node->DebugGetValue(key, &value) || value != expected_value)
                     {
+                        values << "<missing-or-mismatch>";
                         ok = false;
                         break;
                     }
+                    values << value;
                 }
+                last_values = values.str();
                 if (ok)
                 {
+                    if (diagnostics != nullptr)
+                    {
+                        *diagnostics = "value observed on all nodes, key=" + key +
+                                       ", expected=" + expected_value +
+                                       ", cluster=" + DescribeCluster(nodes);
+                    }
                     return true;
                 }
                 std::this_thread::sleep_for(100ms);
+            }
+            if (diagnostics != nullptr)
+            {
+                *diagnostics = "value not observed on all nodes, key=" + key +
+                               ", expected=" + expected_value +
+                               ", cluster_values=" + last_values +
+                               ", cluster=" + DescribeCluster(nodes);
             }
             return false;
         }
@@ -278,10 +401,12 @@ namespace raftdemo
         }
 
         bool WaitForSnapshots(const std::vector<snapshotConfig> &snapshot_configs,
-                              std::chrono::milliseconds timeout)
+                              std::chrono::milliseconds timeout,
+                              std::string *diagnostics = nullptr)
         {
             const auto deadline = std::chrono::steady_clock::now() + timeout;
             const std::size_t required = snapshot_configs.size() / 2 + 1;
+            std::size_t last_ready = 0;
             while (std::chrono::steady_clock::now() < deadline)
             {
                 std::size_t ready = 0;
@@ -292,11 +417,119 @@ namespace raftdemo
                         ++ready;
                     }
                 }
+                last_ready = ready;
                 if (ready >= required)
                 {
+                    if (diagnostics != nullptr)
+                    {
+                        *diagnostics = "snapshot majority reached, ready=" +
+                                       std::to_string(ready) +
+                                       ", required=" + std::to_string(required);
+                    }
                     return true;
                 }
                 std::this_thread::sleep_for(100ms);
+            }
+            if (diagnostics != nullptr)
+            {
+                *diagnostics = "snapshot majority not reached, ready=" +
+                               std::to_string(last_ready) +
+                               ", required=" + std::to_string(required);
+            }
+            return false;
+        }
+
+        bool ProposeWithStableLeaderRetry(const std::vector<std::shared_ptr<RaftNode>> &nodes,
+                                          const Command &command,
+                                          std::chrono::milliseconds timeout,
+                                          ProposeResult *final_result,
+                                          std::string *diagnostics = nullptr)
+        {
+            const auto deadline = std::chrono::steady_clock::now() + timeout;
+            ProposeResult last_result;
+            std::size_t last_leader_index = nodes.size();
+            std::string last_leader_describe = "none";
+            std::string last_cluster_state = DescribeCluster(nodes);
+            int attempts = 0;
+            int no_stable_leader_rounds = 0;
+
+            while (std::chrono::steady_clock::now() < deadline)
+            {
+                auto stable_leader = WaitForStableLeader(nodes, 1500ms);
+                if (!stable_leader.has_value())
+                {
+                    ++no_stable_leader_rounds;
+                    last_cluster_state = DescribeCluster(nodes);
+                    std::this_thread::sleep_for(50ms);
+                    continue;
+                }
+
+                ++attempts;
+                last_leader_index = stable_leader->leader_index;
+                last_leader_describe = stable_leader->leader->Describe();
+                last_cluster_state = DescribeCluster(nodes);
+
+                last_result = stable_leader->leader->Propose(command);
+                if (last_result.Ok())
+                {
+                    if (final_result != nullptr)
+                    {
+                        *final_result = last_result;
+                    }
+                    if (diagnostics != nullptr)
+                    {
+                        *diagnostics = "proposal committed, attempts=" + std::to_string(attempts) +
+                                       ", leader_index=" + std::to_string(last_leader_index) +
+                                       ", leader=" + last_leader_describe +
+                                       ", cluster=" + last_cluster_state;
+                    }
+                    return true;
+                }
+
+                if (last_result.status == ProposeStatus::kInvalidCommand ||
+                    last_result.status == ProposeStatus::kApplyFailed ||
+                    last_result.status == ProposeStatus::kCommitFailed)
+                {
+                    break;
+                }
+
+                std::this_thread::sleep_for(100ms);
+            }
+
+            if (final_result != nullptr)
+            {
+                *final_result = last_result;
+            }
+            if (diagnostics != nullptr)
+            {
+                std::string category = "proposal_failure";
+                if (no_stable_leader_rounds > 0 && attempts == 0)
+                {
+                    category = "leader_not_stable_before_propose";
+                }
+                else if (last_result.status == ProposeStatus::kNotLeader)
+                {
+                    category = "leadership_churn_during_propose";
+                }
+                else if (last_result.status == ProposeStatus::kReplicationFailed ||
+                         last_result.status == ProposeStatus::kTimeout ||
+                         last_result.status == ProposeStatus::kCommitFailed)
+                {
+                    category = "proposal_failed_before_majority_or_commit";
+                }
+                else if (last_result.status == ProposeStatus::kApplyFailed)
+                {
+                    category = "proposal_committed_but_apply_failed";
+                }
+
+                *diagnostics = "category=" + category +
+                               ", attempts=" + std::to_string(attempts) +
+                               ", no_stable_leader_rounds=" + std::to_string(no_stable_leader_rounds) +
+                               ", last_leader_index=" + std::to_string(last_leader_index) +
+                               ", last_leader=" + last_leader_describe +
+                               ", last_status=" + std::to_string(static_cast<int>(last_result.status)) +
+                               ", last_message=" + last_result.message +
+                               ", cluster=" + last_cluster_state;
             }
             return false;
         }
@@ -362,8 +595,10 @@ namespace raftdemo
             Log("snapshot_recovery_gtest", "phase-1 start cluster and write logs");
 
             auto cluster = StartCluster(node_configs, snapshot_configs);
-            auto leader = WaitForLeader(cluster.nodes, 6s);
-            ASSERT_NE(leader, nullptr) << "leader not elected in phase-1";
+            auto stable_leader = WaitForStableLeader(cluster.nodes, 6s);
+            ASSERT_TRUE(stable_leader.has_value())
+                << "leader not stable in phase-1, cluster=" << DescribeCluster(cluster.nodes);
+            auto leader = stable_leader->leader;
 
             LogClusterState("phase-1 leader elected", cluster.nodes);
 
@@ -371,15 +606,28 @@ namespace raftdemo
             {
                 const auto key = "k" + std::to_string(i);
                 const auto value = "v" + std::to_string(i);
-                const auto result = leader->Propose(MakeSet(key, value));
-                ASSERT_TRUE(result.Ok()) << "propose failed at i=" << i << ", message=" << result.message;
+                ProposeResult result;
+                std::string propose_diagnostics;
+                ASSERT_TRUE(ProposeWithStableLeaderRetry(cluster.nodes,
+                                                        MakeSet(key, value),
+                                                        10s,
+                                                        &result,
+                                                        &propose_diagnostics))
+                    << "propose failed at i=" << i
+                    << ", status=" << static_cast<int>(result.status)
+                    << ", message=" << result.message
+                    << ", diagnostics=" << propose_diagnostics;
             }
 
-            ASSERT_TRUE(WaitForValueOnAllNodes(cluster.nodes, "k24", "v24", 8s))
-                << "replicated values did not reach all nodes in phase-1";
+            std::string replication_diagnostics;
+            ASSERT_TRUE(WaitForValueOnAllNodes(cluster.nodes, "k24", "v24", 8s, &replication_diagnostics))
+                << "replicated values did not reach all nodes in phase-1, diagnostics="
+                << replication_diagnostics;
 
-            ASSERT_TRUE(WaitForSnapshots(snapshot_configs, 10s))
-                << "snapshot files were not created for a majority of nodes";
+            std::string snapshot_diagnostics;
+            ASSERT_TRUE(WaitForSnapshots(snapshot_configs, 10s, &snapshot_diagnostics))
+                << "snapshot files were not created for a majority of nodes, diagnostics="
+                << snapshot_diagnostics;
 
             LogClusterState("phase-1 after 25 commands", cluster.nodes);
             LogSnapshotFiles(snapshot_configs);
@@ -389,21 +637,40 @@ namespace raftdemo
             Log("snapshot_recovery_gtest", "phase-2 restart cluster and verify recovery");
 
             auto restarted = StartCluster(node_configs, snapshot_configs);
-            auto restarted_leader = WaitForLeader(restarted.nodes, 6s);
-            ASSERT_NE(restarted_leader, nullptr) << "leader not elected after restart";
+            auto restarted_stable_leader = WaitForStableLeader(restarted.nodes, 6s);
+            ASSERT_TRUE(restarted_stable_leader.has_value())
+                << "leader not stable after restart, cluster=" << DescribeCluster(restarted.nodes);
+            auto restarted_leader = restarted_stable_leader->leader;
 
             LogClusterState("phase-2 after restart before new propose", restarted.nodes);
 
-            ASSERT_TRUE(WaitForValueOnAllNodes(restarted.nodes, "k0", "v0", 8s))
-                << "k0 was not restored on all nodes";
-            ASSERT_TRUE(WaitForValueOnAllNodes(restarted.nodes, "k24", "v24", 8s))
-                << "k24 was not restored on all nodes";
+            std::string restore_k0_diagnostics;
+            ASSERT_TRUE(WaitForValueOnAllNodes(restarted.nodes, "k0", "v0", 8s, &restore_k0_diagnostics))
+                << "k0 was not restored on all nodes, diagnostics=" << restore_k0_diagnostics;
+            std::string restore_k24_diagnostics;
+            ASSERT_TRUE(WaitForValueOnAllNodes(restarted.nodes, "k24", "v24", 8s, &restore_k24_diagnostics))
+                << "k24 was not restored on all nodes, diagnostics=" << restore_k24_diagnostics;
 
-            const auto after_restart_result = restarted_leader->Propose(MakeSet("after_restart", "ok"));
-            ASSERT_TRUE(after_restart_result.Ok()) << after_restart_result.message;
+            ProposeResult after_restart_result;
+            std::string after_restart_propose_diagnostics;
+            ASSERT_TRUE(ProposeWithStableLeaderRetry(restarted.nodes,
+                                                    MakeSet("after_restart", "ok"),
+                                                    10s,
+                                                    &after_restart_result,
+                                                    &after_restart_propose_diagnostics))
+                << "post-restart propose failed, status="
+                << static_cast<int>(after_restart_result.status)
+                << ", message=" << after_restart_result.message
+                << ", diagnostics=" << after_restart_propose_diagnostics;
 
-            ASSERT_TRUE(WaitForValueOnAllNodes(restarted.nodes, "after_restart", "ok", 8s))
-                << "post-restart writes did not replicate to all nodes";
+            std::string post_restart_replication_diagnostics;
+            ASSERT_TRUE(WaitForValueOnAllNodes(restarted.nodes,
+                                               "after_restart",
+                                               "ok",
+                                               8s,
+                                               &post_restart_replication_diagnostics))
+                << "post-restart writes did not replicate to all nodes, diagnostics="
+                << post_restart_replication_diagnostics;
 
             LogClusterState("phase-2 after recovery and new propose", restarted.nodes);
             LogSnapshotFiles(snapshot_configs);
