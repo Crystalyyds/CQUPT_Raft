@@ -70,7 +70,7 @@
   Result: `Passed`, `1/1 tests passed`
   Execution Note: 实际命中的测试定义位于 `tests/snapshot_test.cpp`；本次未修改生产代码。
 
-- [ ] T004 Add deterministic diagnosis for `RaftSplitBrainTest` in `tests/test_raft_split_brain.cpp`
+- [x] T004 Add deterministic diagnosis for `RaftSplitBrainTest` in `tests/test_raft_split_brain.cpp`
   Goal: 稳定 `RaftSplitBrainTest.MinorityLeaderTimesOutAndDoesNotApplyUncommittedCommand` 的 leader election timing 路径，不弱化 split-brain 断言。
   Input: `tests/test_raft_split_brain.cpp`, `specs/003-persistence-reliability/progress.md`, `validation-matrix.md`.
   Scope: 只改 `tests/test_raft_split_brain.cpp`，必要时增加更明确的等待/诊断逻辑。
@@ -81,7 +81,9 @@
   Linux-Specific: Yes, 当前 blocker 来源于 Linux 主验收。
   Windows/macOS Fallback: Yes, 该场景在非 Linux 先走平台无关 rerun，不承诺 crash-style 等价。
   Basis: `specs/003-persistence-reliability/progress.md` Blocked 中的 `RaftSplitBrainTest...` flaky；`plan.md` W1。
-  Tests To Run: `ctest --test-dir build --output-on-failure -R '^RaftSplitBrainTest\.'`; `./test.sh --group election`.
+  Tests To Run: `CTEST_PARALLEL_LEVEL=1 ctest --test-dir build --output-on-failure -R '^RaftSplitBrainTest\.MinorityLeaderTimesOutAndDoesNotApplyUncommittedCommand$'`
+  Result: `Passed`, `1/1 tests passed`
+  Execution Note: 修改文件为 `tests/test_raft_split_brain.cpp`；本次未修改生产代码；`--repeat until-fail:3` 未执行，因此无 repeat 结果可记录。
 
 - [ ] T005 Update `test.sh` comments/output and `specs/004-raft-industrialization/validation-matrix.md`
   Goal: 给当前已知 blocker 和高风险回归组补上保留数据、低并发 rerun 和失败定位提示。

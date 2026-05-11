@@ -9,6 +9,7 @@
 #include <memory>
 #include <optional>
 #include <random>
+#include <sstream>
 #include <string>
 #include <thread>
 #include <vector>
@@ -101,6 +102,31 @@ std::optional<std::uint64_t> ParseUintField(const std::string& text,
   }
 }
 
+std::optional<int> ParseIntField(const std::string& text, const std::string& field) {
+  const auto pos = text.find(field);
+  if (pos == std::string::npos) {
+    return std::nullopt;
+  }
+
+  std::size_t begin = pos + field.size();
+  std::size_t end = begin;
+  if (end < text.size() && text[end] == '-') {
+    ++end;
+  }
+  while (end < text.size() && text[end] >= '0' && text[end] <= '9') {
+    ++end;
+  }
+  if (end == begin || (end == begin + 1 && text[begin] == '-')) {
+    return std::nullopt;
+  }
+
+  try {
+    return std::stoi(text.substr(begin, end - begin));
+  } catch (...) {
+    return std::nullopt;
+  }
+}
+
 Command SetCommand(const std::string& key, const std::string& value) {
   Command command;
   command.type = CommandType::kSet;
@@ -117,10 +143,10 @@ std::vector<NodeConfig> BuildThreeNodeConfigs(int base_port, const fs::path& roo
     NodeConfig cfg;
     cfg.node_id = id;
     cfg.address = "127.0.0.1:" + std::to_string(base_port + id);
-    cfg.election_timeout_min = 250ms;
-    cfg.election_timeout_max = 500ms;
-    cfg.heartbeat_interval = 60ms;
-    cfg.rpc_deadline = 50ms;
+    cfg.election_timeout_min = 300ms;
+    cfg.election_timeout_max = 600ms;
+    cfg.heartbeat_interval = 80ms;
+    cfg.rpc_deadline = 500ms;
     cfg.data_dir = (root / "raft_data" / ("node_" + std::to_string(id))).string();
 
     for (int peer_id = 1; peer_id <= 3; ++peer_id) {
@@ -234,6 +260,47 @@ class SplitBrainCluster {
     return std::nullopt;
   }
 
+  std::string DescribeCluster() const {
+    std::ostringstream oss;
+    bool first = true;
+    for (std::size_t i = 0; i < nodes_.size(); ++i) {
+      if (!first) {
+        oss << " | ";
+      }
+      first = false;
+      oss << "node[" << i << "] id=" << nodes_[i].node_id
+          << " running=" << (nodes_[i].running ? "true" : "false");
+      if (nodes_[i].running) {
+        oss << " " << nodes_[i].node->Describe();
+      }
+    }
+    return oss.str();
+  }
+
+  std::string DescribeValueOnAllNodes(const std::string& key) const {
+    std::ostringstream oss;
+    bool first = true;
+    for (std::size_t i = 0; i < nodes_.size(); ++i) {
+      if (!first) {
+        oss << " | ";
+      }
+      first = false;
+      oss << "node[" << i << "] id=" << nodes_[i].node_id
+          << " running=" << (nodes_[i].running ? "true" : "false");
+      if (!nodes_[i].running) {
+        continue;
+      }
+
+      std::string actual;
+      if (nodes_[i].node->DebugGetValue(key, &actual)) {
+        oss << " value=" << actual;
+      } else {
+        oss << " value=<absent>";
+      }
+    }
+    return oss.str();
+  }
+
   bool WaitUntilValueOnAllRunning(const std::string& key, const std::string& value,
                                   std::chrono::milliseconds timeout) const {
     const auto deadline = std::chrono::steady_clock::now() + timeout;
@@ -257,9 +324,33 @@ class SplitBrainCluster {
     return false;
   }
 
+  bool WaitUntilSingleLeader(std::chrono::milliseconds timeout) const {
+    const auto deadline = std::chrono::steady_clock::now() + timeout;
+    while (std::chrono::steady_clock::now() < deadline) {
+      int leader_count = 0;
+      for (const auto& runtime : nodes_) {
+        if (!runtime.running) {
+          continue;
+        }
+        if (IsLeaderSnapshot(runtime.node->Describe())) {
+          ++leader_count;
+        }
+      }
+      if (leader_count == 1) {
+        return true;
+      }
+      std::this_thread::sleep_for(50ms);
+    }
+    return false;
+  }
+
   std::shared_ptr<RaftNode> Node(std::size_t index) const {
     return nodes_.at(index).node;
   }
+
+  std::size_t Size() const { return nodes_.size(); }
+
+  bool IsRunning(std::size_t index) const { return nodes_.at(index).running; }
 
   int NodeId(std::size_t index) const {
     return nodes_.at(index).node_id;
@@ -288,25 +379,325 @@ class SplitBrainCluster {
   std::vector<NodeRuntime> nodes_;
 };
 
+std::optional<std::size_t> FindLeaderOnce(const SplitBrainCluster& cluster,
+                                          std::string* leader_snapshot) {
+  for (std::size_t i = 0; i < cluster.Size(); ++i) {
+    if (!cluster.IsRunning(i)) {
+      continue;
+    }
+    const std::string snapshot = cluster.Node(i)->Describe();
+    if (IsLeaderSnapshot(snapshot)) {
+      if (leader_snapshot != nullptr) {
+        *leader_snapshot = snapshot;
+      }
+      return i;
+    }
+  }
+  if (leader_snapshot != nullptr) {
+    leader_snapshot->clear();
+  }
+  return std::nullopt;
+}
+
+std::optional<int> FindMajorityVotedCandidate(const SplitBrainCluster& cluster,
+                                              std::string* vote_summary) {
+  std::vector<std::pair<int, int>> vote_counts;
+  std::ostringstream summary;
+  bool first = true;
+
+  for (std::size_t i = 0; i < cluster.Size(); ++i) {
+    if (!cluster.IsRunning(i)) {
+      continue;
+    }
+
+    const std::string snapshot = cluster.Node(i)->Describe();
+    const std::optional<int> voted_for = ParseIntField(snapshot, "voted_for=");
+    if (!first) {
+      summary << " | ";
+    }
+    first = false;
+    summary << "node[" << i << "] voted_for=";
+    if (voted_for.has_value()) {
+      summary << *voted_for;
+    } else {
+      summary << "<unknown>";
+    }
+
+    if (!voted_for.has_value() || *voted_for <= 0) {
+      continue;
+    }
+
+    bool matched = false;
+    for (auto& [candidate_id, count] : vote_counts) {
+      if (candidate_id == *voted_for) {
+        ++count;
+        matched = true;
+        break;
+      }
+    }
+    if (!matched) {
+      vote_counts.emplace_back(*voted_for, 1);
+    }
+  }
+
+  if (vote_summary != nullptr) {
+    *vote_summary = summary.str();
+  }
+
+  for (const auto& [candidate_id, count] : vote_counts) {
+    if (count >= 2) {
+      return candidate_id;
+    }
+  }
+  return std::nullopt;
+}
+
+std::string FormatLeaderObservation(std::optional<std::size_t> leader_index,
+                                    int consecutive_observations,
+                                    const std::string& cluster_snapshot) {
+  std::ostringstream oss;
+  oss << "leader=";
+  if (leader_index.has_value()) {
+    oss << *leader_index;
+  } else {
+    oss << "<none>";
+  }
+  oss << ", consecutive_observations=" << consecutive_observations
+      << ", cluster=" << cluster_snapshot;
+  return oss.str();
+}
+
+std::optional<std::size_t> WaitForStableLeader(const SplitBrainCluster& cluster,
+                                               std::chrono::milliseconds timeout,
+                                               int required_consecutive_observations,
+                                               std::string* diagnostics) {
+  const auto deadline = std::chrono::steady_clock::now() + timeout;
+  std::optional<std::chrono::steady_clock::time_point> vote_grace_deadline;
+  std::optional<std::size_t> last_leader;
+  int consecutive = 0;
+  std::string last_cluster_snapshot = cluster.DescribeCluster();
+  std::string last_vote_summary;
+  std::optional<int> last_majority_voted_candidate;
+  std::string last_leader_snapshot;
+
+  while (true) {
+    const auto now = std::chrono::steady_clock::now();
+    const std::optional<std::size_t> current_leader =
+        FindLeaderOnce(cluster, &last_leader_snapshot);
+    last_cluster_snapshot = cluster.DescribeCluster();
+    last_majority_voted_candidate =
+        FindMajorityVotedCandidate(cluster, &last_vote_summary);
+
+    if (current_leader.has_value()) {
+      if (last_leader == current_leader) {
+        ++consecutive;
+      } else {
+        last_leader = current_leader;
+        consecutive = 1;
+      }
+
+      if (consecutive >= required_consecutive_observations) {
+        if (diagnostics != nullptr) {
+          *diagnostics = "stable leader observed: " +
+                         FormatLeaderObservation(last_leader, consecutive,
+                                                 last_cluster_snapshot) +
+                         ", leader_snapshot=" + last_leader_snapshot;
+        }
+        return current_leader;
+      }
+    } else {
+      last_leader.reset();
+      consecutive = 0;
+
+      if (now >= deadline && last_majority_voted_candidate.has_value() &&
+          !vote_grace_deadline.has_value()) {
+        vote_grace_deadline = now + 600ms;
+      }
+    }
+
+    if (now >= deadline &&
+        (!vote_grace_deadline.has_value() || now >= *vote_grace_deadline)) {
+      break;
+    }
+
+    std::this_thread::sleep_for(50ms);
+  }
+
+  if (diagnostics != nullptr) {
+    *diagnostics = "election did not converge to a stable leader within timeout; " +
+                   FormatLeaderObservation(last_leader, consecutive,
+                                           last_cluster_snapshot) +
+                   ", majority_voted_candidate=" +
+                   (last_majority_voted_candidate.has_value()
+                        ? std::to_string(*last_majority_voted_candidate)
+                        : std::string("<none>")) +
+                   ", votes=" + last_vote_summary +
+                   (vote_grace_deadline.has_value()
+                        ? ", vote_progress_grace=used"
+                        : ", vote_progress_grace=unused");
+  }
+  return std::nullopt;
+}
+
+bool WaitForValueToRemainAbsent(const SplitBrainCluster& cluster, std::size_t node_index,
+                                const std::string& key,
+                                std::chrono::milliseconds timeout,
+                                std::string* diagnostics) {
+  const auto deadline = std::chrono::steady_clock::now() + timeout;
+  std::string last_value_summary = cluster.DescribeValueOnAllNodes(key);
+
+  while (std::chrono::steady_clock::now() < deadline) {
+    std::string actual;
+    if (cluster.Node(node_index)->DebugGetValue(key, &actual)) {
+      if (diagnostics != nullptr) {
+        *diagnostics =
+            "uncommitted command became visible on minority node; value=" + actual +
+            ", values=" + cluster.DescribeValueOnAllNodes(key) +
+            ", cluster=" + cluster.DescribeCluster();
+      }
+      return false;
+    }
+
+    last_value_summary = cluster.DescribeValueOnAllNodes(key);
+    std::this_thread::sleep_for(50ms);
+  }
+
+  if (diagnostics != nullptr) {
+    *diagnostics = "value remained absent during observation window; values=" +
+                   last_value_summary + ", cluster=" + cluster.DescribeCluster();
+  }
+  return true;
+}
+
+bool WaitForLeaderServiceReady(const SplitBrainCluster& cluster, std::size_t leader_index,
+                               std::chrono::milliseconds timeout,
+                               std::string* diagnostics) {
+  const auto deadline = std::chrono::steady_clock::now() + timeout;
+  const auto follower_indexes = cluster.OtherIndexes(leader_index);
+  std::string last_cluster_snapshot = cluster.DescribeCluster();
+  std::string last_reason = "leader role not yet observable";
+
+  while (std::chrono::steady_clock::now() < deadline) {
+    const std::string leader_snapshot = cluster.Node(leader_index)->Describe();
+    last_cluster_snapshot = cluster.DescribeCluster();
+
+    if (!IsLeaderSnapshot(leader_snapshot)) {
+      std::string vote_summary;
+      const std::optional<int> majority_voted_candidate =
+          FindMajorityVotedCandidate(cluster, &vote_summary);
+      last_reason =
+          "majority vote formed but leader role not observable; leader_snapshot=" +
+          leader_snapshot + ", majority_voted_candidate=" +
+          (majority_voted_candidate.has_value()
+               ? std::to_string(*majority_voted_candidate)
+               : std::string("<none>")) +
+          ", votes=" + vote_summary;
+      std::this_thread::sleep_for(50ms);
+      continue;
+    }
+
+    bool followers_ready = true;
+    for (const auto follower_index : follower_indexes) {
+      const std::string follower_snapshot = cluster.Node(follower_index)->Describe();
+      if (IsLeaderSnapshot(follower_snapshot)) {
+        followers_ready = false;
+        last_reason = "multiple leaders observable while waiting for service-ready; "
+                      "follower_snapshot=" + follower_snapshot;
+        break;
+      }
+    }
+    if (!followers_ready) {
+      std::this_thread::sleep_for(50ms);
+      continue;
+    }
+
+    for (const auto follower_index : follower_indexes) {
+      const ProposeResult probe = cluster.Node(follower_index)->Propose(
+          SetCommand("__leader_ready_probe__", std::to_string(cluster.NodeId(leader_index))));
+      if (probe.status != ProposeStatus::kNotLeader) {
+        followers_ready = false;
+        last_reason = "leader observable but follower still not redirecting writes; "
+                      "follower_index=" + std::to_string(follower_index) +
+                      ", status=" + std::to_string(static_cast<int>(probe.status)) +
+                      ", message=" + probe.message;
+        break;
+      }
+      if (probe.leader_id != -1 && probe.leader_id != cluster.NodeId(leader_index)) {
+        followers_ready = false;
+        last_reason = "leader observable but follower reports different leader_id; "
+                      "follower_index=" + std::to_string(follower_index) +
+                      ", reported_leader_id=" + std::to_string(probe.leader_id) +
+                      ", expected_leader_id=" + std::to_string(cluster.NodeId(leader_index));
+        break;
+      }
+    }
+
+    if (followers_ready) {
+      if (diagnostics != nullptr) {
+        *diagnostics = "leader service-ready observed; leader_index=" +
+                       std::to_string(leader_index) + ", cluster=" +
+                       last_cluster_snapshot;
+      }
+      return true;
+    }
+
+    std::this_thread::sleep_for(50ms);
+  }
+
+  if (diagnostics != nullptr) {
+    *diagnostics = last_reason + ", cluster=" + last_cluster_snapshot;
+  }
+  return false;
+}
+
 TEST(RaftSplitBrainTest, MinorityLeaderTimesOutAndDoesNotApplyUncommittedCommand) {
   SplitBrainCluster cluster(PickBasePort());
   cluster.StartAll();
 
   const auto leader_index = cluster.WaitForLeader(5s);
-  ASSERT_TRUE(leader_index.has_value());
+  ASSERT_TRUE(leader_index.has_value())
+      << "election 未收敛；cluster=" << cluster.DescribeCluster();
+
+  ASSERT_TRUE(cluster.WaitUntilSingleLeader(2s))
+      << "leader 可见但未收敛到单 leader；cluster=" << cluster.DescribeCluster();
+
+  std::string service_ready_diagnostics;
+  ASSERT_TRUE(WaitForLeaderServiceReady(cluster, *leader_index, 2s, &service_ready_diagnostics))
+      << "leader observable but not service-ready；" << service_ready_diagnostics;
 
   for (const auto follower_index : cluster.OtherIndexes(*leader_index)) {
     cluster.StopNode(follower_index);
   }
 
+  const std::string isolated_snapshot = cluster.Node(*leader_index)->Describe();
+  ASSERT_TRUE(IsLeaderSnapshot(isolated_snapshot))
+      << "没有形成预期 minority partition：被隔离节点在 proposal 前已不是 leader; leader_index="
+      << *leader_index << ", leader_before_partition=" << service_ready_diagnostics
+      << ", isolated_node=" << isolated_snapshot
+      << ", cluster=" << cluster.DescribeCluster();
+
   const ProposeResult result =
       cluster.Node(*leader_index)->Propose(SetCommand("minority_key", "uncommitted"));
 
-  EXPECT_EQ(result.status, ProposeStatus::kTimeout) << result.message;
-  EXPECT_GT(result.log_index, 0u);
+  EXPECT_EQ(result.status, ProposeStatus::kTimeout)
+      << "minority leader 没有按预期超时; status="
+      << static_cast<int>(result.status) << ", message=" << result.message
+      << ", leader_index=" << *leader_index
+      << ", leader_before_partition=" << service_ready_diagnostics
+      << ", isolated_node=" << cluster.Node(*leader_index)->Describe()
+      << ", cluster=" << cluster.DescribeCluster();
+  EXPECT_GT(result.log_index, 0u)
+      << "proposal 未进入本地日志，无法证明 minority leader 提案后未形成 majority; "
+      << "message=" << result.message << ", isolated_node="
+      << cluster.Node(*leader_index)->Describe()
+      << ", cluster=" << cluster.DescribeCluster();
 
-  std::string value;
-  EXPECT_FALSE(cluster.Node(*leader_index)->DebugGetValue("minority_key", &value));
+  std::string absence_diagnostics;
+  EXPECT_TRUE(WaitForValueToRemainAbsent(cluster, *leader_index, "minority_key", 500ms,
+                                         &absence_diagnostics))
+      << "uncommitted command 被错误 apply; " << absence_diagnostics
+      << ", propose_status=" << static_cast<int>(result.status)
+      << ", propose_message=" << result.message;
 }
 
 TEST(RaftSplitBrainTest, LeaderStepsDownWhenHigherTermAppendEntriesArrives) {
