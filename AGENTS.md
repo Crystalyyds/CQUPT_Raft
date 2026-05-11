@@ -152,3 +152,9 @@ CTEST_PARALLEL_LEVEL=1 ./test.sh --group all
   - `proto/raft.proto`
   - 目标模块目录
   - 与目标模块直接相关的测试文件
+
+<!-- SPECKIT START -->
+For additional context about technologies to be used, project structure,
+shell commands, and other important information, read
+`specs/004-raft-industrialization/plan.md`
+<!-- SPECKIT END -->
