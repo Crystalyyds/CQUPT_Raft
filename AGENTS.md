@@ -2,6 +2,14 @@
 
 一句话说明：这是一个基于 C++20、gRPC、Protobuf、GoogleTest 的 Raft KV 内核项目，重点在一致性内核、持久化、快照、追赶和重启恢复。
 
+## Language Rules
+
+- 默认使用中文进行分析、规划、任务拆分、执行总结和测试结果说明。
+- Spec Kit 生成的 spec.md、plan.md、tasks.md、validation-matrix.md 等自然语言文档优先使用中文。
+- 代码标识符、文件名、目录名、类名、函数名、测试名、CMake target 名称保持英文。
+- 命令行、CMake、bash、PowerShell、C++ 代码块保持原样。
+- 技术术语允许中英混合，例如 Raft、leader election、AppendEntries、snapshot、follower catch-up、crash recovery、failure injection。
+
 ## 全局规则
 
 - 平台相关的 durability 代码不允许静默降级。

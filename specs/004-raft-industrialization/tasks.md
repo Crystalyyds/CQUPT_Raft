@@ -21,7 +21,7 @@
 **Purpose**: 固定只做“剩余工业化缺口”，明确与 `003-persistence-reliability`
 的边界，避免后续重复规划已完成能力。
 
-- [ ] T001 Create `specs/004-raft-industrialization/validation-matrix.md`
+- [x] T001 Create `specs/004-raft-industrialization/validation-matrix.md`
   Goal: 建立本 feature 的单一风险与验证矩阵，冻结“已完成/补测试/需修复/跨平台风险/新增/暂缓”分类。
   Input: `specs/004-raft-industrialization/spec.md`, `plan.md`, `quickstart.md`, `specs/003-persistence-reliability/progress.md`, `test.sh`.
   Scope: 新增 `specs/004-raft-industrialization/validation-matrix.md`，不改生产代码。

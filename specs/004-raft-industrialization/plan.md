@@ -3,6 +3,16 @@
 **Branch**: `[spec-kit]` | **Date**: 2026-05-11 | **Spec**: [spec.md](./spec.md)  
 **Input**: Feature specification from `/specs/004-raft-industrialization/spec.md`
 
+## Build and Test Resource Limits
+This project is developed on a local machine with limited CPU resources. Do not run high-parallel build or test commands.
+Required build commands:
+
+```bash
+  cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Debug
+  cmake --build build --parallel 2
+```
+
+
 ## Summary
 
 本计划基于当前 CQUPT_Raft 已有实现推进工业化补强，而不是重新设计
