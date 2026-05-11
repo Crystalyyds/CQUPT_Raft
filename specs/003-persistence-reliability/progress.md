@@ -2,7 +2,7 @@
 
 ## Current Phase
 
-- `Phase 6B: crash / failure injection tests minimal implementation`
+- `Final Linux Validation task generation`
 
 ## Completed
 
@@ -99,18 +99,28 @@
 - 已完成 T620：更新 Phase 6B 进度状态
 - 已完成 T621：更新 Phase 6B 决策记录
 - 已完成 T622：生成 Phase 6B 阶段报告
+- 已完成根据最终验收文档生成 Linux-only 总测试任务清单
 
 ## In Progress
 
-- `None`
+- Final Linux Validation 正在执行
+- 已完成 T711：记录并分类当前 Linux 总验收失败
+- 已完成 T712：复现 `RaftSnapshotRecoveryTest.SavesSnapshotAndRestoresAfterRestart` 单测级 flaky，单独重复运行第 4 次失败
+- T713：正在分析 snapshot recovery 测试是否依赖“leader 在 proposal loop 期间不变”的时序假设
+- T715：已确认 `RaftSplitBrainTest.MinorityLeaderTimesOutAndDoesNotApplyUncommittedCommand` 不只是基础筛选正则误匹配，也存在独立 leader election timing flaky 风险
 
 ## Blocked
 
 - T613-T616：精确 `fsync`、directory `fsync`、rename / replace、remove / prune、partial write failure injection 仍需要 test-only hook；Phase 6B 未修改生产代码，因此未实现该 hook
+- Final Linux Validation：当前被两个独立时序型测试失败阻塞
+- 阻塞项 1：`RaftSnapshotRecoveryTest.SavesSnapshotAndRestoresAfterRestart` 在单独重复运行中失败，错误为 `propose failed ... lost leadership before the log entry reached a majority`
+- 阻塞项 2：`RaftSplitBrainTest.MinorityLeaderTimesOutAndDoesNotApplyUncommittedCommand` 在单独 CTest 运行中失败，错误为 `leader_index.has_value() == false`
 
 ## Next
 
-- `Phase 6C: test-only failure injection hook design / implementation, if approved`
+- 进入 T713/T714：分析并设计 snapshot recovery 测试侧稳定化方案，不能弱化 snapshot / restart recovery 断言
+- 为 split-brain flaky 单独归档或设计独立稳定性任务，不和 persistence durability 修复混在一起
+- 修复前继续禁止修改生产业务代码、持久化格式、Raft 协议、KV、proto / RPC / transport
 
 ## Notes
 
@@ -137,6 +147,8 @@
 - Phase 6B 未修改生产 `.h` / `.cpp`，未引入 test-only failure injection hook
 - Phase 6B 未覆盖精确 fsync、directory fsync、rename、remove、prune 和 partial write 注入失败；这些需要后续 hook 设计
 - Phase 6B 相关测试在当前 POSIX/Linux 环境通过
+- Final Linux Validation 当前只生成测试任务，不执行测试、不修 bug、不修改代码
+- Final Linux Validation 当前只覆盖 Linux；Windows runtime semantics 继续标记为未实机验证，不能声明跨平台完全通过
 - 本阶段不修改持久化格式
 - 未修改 KV / proto / RPC / transport
 - 未修改 segment log append / truncate 逻辑

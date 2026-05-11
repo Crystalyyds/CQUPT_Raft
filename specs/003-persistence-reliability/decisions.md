@@ -274,3 +274,27 @@ Phase 2 中 segment log durability 实现引入了 POSIX fsync 语义，但 Wind
 - Decision: Phase 6B 的 crash matrix 放入阶段报告，不新增独立 `crash-matrix.md`
 - Status: Accepted
 - Reason: 当前允许修改的 spec 文件不包括新的 crash matrix 文档；将矩阵写入阶段报告可以满足覆盖映射需求，同时避免扩大文档文件范围
+
+## D045
+
+- Decision: Final validation task generation 当前只覆盖 Linux，不生成 Windows 测试任务
+- Status: Accepted
+- Reason: 本轮目标是基于最终验收文档生成 Linux-only 总测试任务；当前不测试 Windows、不要求 Windows 实机验证，也不能把 Linux 测试结果表述为跨平台完全验证
+
+## D046
+
+- Decision: Windows durability runtime semantics 继续标记为未实机验证
+- Status: Accepted
+- Reason: Windows 分支已有 `FlushFileBuffers` / directory handle 代码路径和 no-op success 禁止约束，但当前验收任务不包含 Windows CI 或实机执行，因此只能保留未验证说明
+
+## D047
+
+- Decision: 本轮只生成测试任务，不执行测试、不修改代码
+- Status: Accepted
+- Reason: 用户明确要求不要执行测试、不要新增测试代码、不要修 bug、不要进入新的实现阶段；本轮只更新 `tasks.md`、`progress.md` 和 `decisions.md`
+
+## D048
+
+- Decision: Final Linux Validation 当前被测试时序稳定性问题阻塞，不能把失败归因写成 persistence durability 已失败
+- Status: Accepted
+- Reason: `RaftSnapshotRecoveryTest.SavesSnapshotAndRestoresAfterRestart` 已在单独重复运行中复现 leadership loss，`RaftSplitBrainTest.MinorityLeaderTimesOutAndDoesNotApplyUncommittedCommand` 也已在单独 CTest 运行中复现 leader election timeout；两者都需要先按测试时序 / leader churn 稳定性问题处理，修复前不得顺手修改生产 Raft 逻辑、持久化格式或协议语义

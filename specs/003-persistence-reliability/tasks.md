@@ -131,3 +131,151 @@
 - [x] T620 更新 `progress.md`
 - [x] T621 更新 `decisions.md`
 - [x] T622 生成 `specs/003-persistence-reliability/phase-reports/phase-6-crash-failure-injection-tests.md`
+
+## Final Linux Validation Checklist
+
+- [ ] T701 Linux clean build and基础单测验证
+  - 测试目标：确认 Linux 下 clean configure / build / link 成功，且基础单测不受 persistence reliability 变更影响。
+  - 推荐命令：`cmake --preset debug-ninja-low-parallel && cmake --build --preset debug-ninja-low-parallel && ctest --test-dir build --output-on-failure -R "Command|StateMachine|Timer|Thread|Config"`
+  - 通过标准：configure、build、link 全部成功；基础单测通过；没有新增跳过或删除测试。
+  - 失败时优先查看：`CMakeLists.txt`、`tests/CMakeLists.txt`、失败测试对应模块。
+  - 是否阻塞最终验收：是。
+
+- [ ] T702 Linux storage / segment log durability 与 recovery 测试
+  - 测试目标：覆盖 segment log append、truncate、recovery、tail corruption truncate、checksum / partial header、meta/log boundary 与 `log.tmp` / `log.bak` 残留恢复。
+  - 推荐命令：`./build/tests/test_raft_segment_storage`
+  - 通过标准：`RaftSegmentStorageTest` 全部通过，尤其是 tail corruption、partial segment header、temporary publish artifact、old meta + new log、新 meta + old log 相关用例通过。
+  - 失败时优先查看：`modules/raft/storage/raft_storage.cpp`、`tests/test_raft_segment_storage.cpp`。
+  - 是否阻塞最终验收：是。
+
+- [ ] T703 Linux POSIX/fsync 路径覆盖确认
+  - 测试目标：确认 Linux 运行的 storage、meta、snapshot 测试实际覆盖 POSIX `fsync` / directory `fsync` 路径，不把 Windows `FlushFileBuffers` 视为已验证。
+  - 推荐命令：`./build/tests/test_raft_segment_storage && ./build/tests/persistence_test && ./build/tests/test_snapshot_storage_reliability`
+  - 通过标准：相关测试在 Linux 通过；最终记录明确写出 POSIX 路径已验证、Windows 路径未实机验证。
+  - 失败时优先查看：`modules/raft/storage/raft_storage.cpp`、`modules/raft/storage/snapshot_storage.cpp`。
+  - 是否阻塞最终验收：是，针对 Linux-only 验收。
+
+- [ ] T704 Linux meta.bin / hard state persistence 测试
+  - 测试目标：覆盖 `meta.bin` 缺失、损坏、unsupported version、`term` / `vote` / `commit_index` / `last_applied` recovery，以及 meta boundary 与 segment log 内容不一致。
+  - 推荐命令：`./build/tests/persistence_test --gtest_filter='PersistenceTest.ColdRestartPreservesPersistedHardStateBeforeStart:PersistenceTest.ColdRestartClampsCommitAndApplyBoundariesToLastLogIndex' && ./build/tests/test_raft_segment_storage --gtest_filter='RaftSegmentStorageTest.SavePublishesMetaFileWithoutLeavingMetaTempFile:RaftSegmentStorageTest.MissingMetaFileCausesLoadToReportNoPersistedState:RaftSegmentStorageTest.CorruptedMetaFileFailsLoad:RaftSegmentStorageTest.UnsupportedMetaVersionFailsLoadWithPathAndVersion:RaftSegmentStorageTest.InconsistentMetaLogBoundaryFailsBeforeTrustingSegments'`
+  - 通过标准：hard state restart 值符合预期；损坏或不一致的 meta/log 状态不会被接受为 trusted state。
+  - 失败时优先查看：`modules/raft/storage/raft_storage.cpp`、`modules/raft/node/raft_node.cpp`、`tests/persistence_test.cpp`、`tests/test_raft_segment_storage.cpp`。
+  - 是否阻塞最终验收：是。
+
+- [ ] T705 Linux snapshot storage reliability 测试
+  - 测试目标：覆盖 staged snapshot publish、缺失 `data.bin`、缺失 `__raft_snapshot_meta`、checksum mismatch、temp / staging snapshot 目录残留、最新 invalid snapshot 回退旧 valid snapshot。
+  - 推荐命令：`./build/tests/test_snapshot_storage_reliability`
+  - 通过标准：`SnapshotStorageReliabilityTest` 全部通过；invalid / incomplete snapshot 不被 catalog 视为 trusted snapshot。
+  - 失败时优先查看：`modules/raft/storage/snapshot_storage.cpp`、`modules/raft/storage/snapshot_storage.h`、`tests/test_snapshot_storage_reliability.cpp`。
+  - 是否阻塞最终验收：是。
+
+- [ ] T706 Linux restart recovery / diagnosis 测试
+  - 测试目标：覆盖 snapshot restart、snapshot diagnosis、post-snapshot tail log replay，以及 recovery 后 `commit_index`、`last_applied`、snapshot index / term、last log index 一致性。
+  - 推荐命令：`./build/tests/test_raft_snapshot_restart && ./build/tests/test_raft_snapshot_diagnosis && ./build/tests/snapshot_test --gtest_filter='RaftSnapshotRecoveryTest.SavesSnapshotAndRestoresAfterRestart'`
+  - 通过标准：snapshot restart / diagnosis 测试通过；恢复诊断能解释 skip reason、selected snapshot 和 post-state summary。
+  - 失败时优先查看：`modules/raft/node/raft_node.cpp`、`modules/raft/storage/snapshot_storage.cpp`、`tests/test_raft_snapshot_restart.cpp`、`tests/test_raft_snapshot_diagnosis.cpp`、`tests/snapshot_test.cpp`。
+  - 是否阻塞最终验收：是。
+
+- [ ] T707 Linux crash-like / power-loss 近似测试
+  - 测试目标：覆盖文件缺失、文件损坏、部分写入、temp 目录残留、boundary 不一致和 power loss 近似场景；明确这些不是精确 syscall failure injection。
+  - 推荐命令：`./build/tests/test_raft_segment_storage --gtest_filter='RaftSegmentStorageTest.TruncatesCorruptedSegmentTailDuringRecovery:RaftSegmentStorageTest.TruncatesPartialSegmentHeaderDuringRecovery:RaftSegmentStorageTest.CorruptedEarlierSegmentTailCleansLaterSegmentsAndReportsDiagnostics:RaftSegmentStorageTest.RecoveryIgnoresTemporaryPublishArtifacts:RaftSegmentStorageTest.MetaAndLogPublishWindowUsesOnlyTrustedBoundary' && ./build/tests/test_snapshot_storage_reliability --gtest_filter='SnapshotStorageReliabilityTest.IgnoresStagingAndIncompleteSnapshotDirectories:SnapshotStorageReliabilityTest.ReportsValidationIssuesForSkippedSnapshotEntries:SnapshotStorageReliabilityTest.FallsBackToOlderSnapshotWhenNewestIsCorrupted:SnapshotStorageReliabilityTest.AllInvalidSnapshotsReturnNoTrustedSnapshotWithDiagnostics'`
+  - 通过标准：坏 tail、temp publish artifact、crossed meta/log、invalid snapshot catalog 都按 trusted-state contract 恢复或拒绝。
+  - 失败时优先查看：`modules/raft/storage/raft_storage.cpp`、`modules/raft/storage/snapshot_storage.cpp`、`tests/test_raft_segment_storage.cpp`、`tests/test_snapshot_storage_reliability.cpp`。
+  - 是否阻塞最终验收：是，针对当前 Linux crash-like 覆盖范围；T613-T616 仍保留为后续 failure injection 缺口。
+
+- [ ] T708 Linux persistence / snapshot / restart 子集回归
+  - 测试目标：覆盖集群级 restart、follower catch-up、snapshot 与 committed tail replay 组合场景。
+  - 推荐命令：`./build/tests/persistence_test && CTEST_PARALLEL_LEVEL=1 ./test.sh --group persistence`
+  - 通过标准：persistence 相关测试全部通过；恢复后 commit/apply/snapshot/log 边界一致。
+  - 失败时优先查看：`modules/raft/node/raft_node.cpp`、`modules/raft/storage/raft_storage.cpp`、`modules/raft/storage/snapshot_storage.cpp`、`tests/persistence_test.cpp`。
+  - 是否阻塞最终验收：是。
+
+- [ ] T709 Linux 完整 CTest / 项目总回归
+  - 测试目标：确认 persistence reliability 变更没有破坏其它 Raft、KV、service、runtime 测试。
+  - 推荐命令：`CTEST_PARALLEL_LEVEL=1 ctest --test-dir build --output-on-failure && CTEST_PARALLEL_LEVEL=1 ./test.sh --group all`
+  - 通过标准：完整 CTest 或项目测试脚本全部通过；没有新增跳过、删除或弱化测试。
+  - 失败时优先查看：失败测试输出和对应测试文件；若失败涉及持久化或恢复，再查看 `modules/raft/storage/*`、`modules/raft/node/raft_node.cpp`、snapshot 相关测试。
+  - 是否阻塞最终验收：是。
+
+- [ ] T710 Linux-only 验收结果记录与 Windows 未验证说明
+  - 测试目标：记录本轮只执行 Linux 验收，不测试 Windows，不声明跨平台完全验证；保留 Windows durability runtime semantics 未实机验证说明。
+  - 推荐命令：不执行额外命令；汇总 T701-T709 的 Linux 测试结果。
+  - 通过标准：最终记录明确区分 Linux 已验证项、Windows 未验证项、power loss 近似测试与真实 power loss 未验证项。
+  - 失败时优先查看：`specs/003-persistence-reliability/phase-reports/final-persistence-validation-plan.md`、`specs/003-persistence-reliability/progress.md`、`specs/003-persistence-reliability/decisions.md`。
+  - 是否阻塞最终验收：是。
+
+## Final Linux Validation Failure Resolution Checklist
+
+- [x] T711 记录并分类当前 Linux 总验收失败
+  - 目标：把已观察到的失败先归档为 final validation blocker，而不是直接改代码。
+  - 已观察失败：`ctest -R "Command|StateMachine|Timer|Thread|Config"` 误匹配并首次触发 `RaftSplitBrainTest.MinorityLeaderTimesOutAndDoesNotApplyUncommittedCommand`，失败点为 `leader_index.has_value() == false`，后续完整 CTest 该用例通过。
+  - 已观察失败：`CTEST_PARALLEL_LEVEL=1 ./test.sh --group all` 在 `RaftSnapshotRecoveryTest.SavesSnapshotAndRestoresAfterRestart` 失败，`propose failed at i=17, message=lost leadership before the log entry reached a majority`；该用例此前单独运行和完整 CTest 均通过。
+  - 追加执行结果：`RaftSnapshotRecoveryTest.SavesSnapshotAndRestoresAfterRestart` 单独重复运行第 4 次失败，失败点为 `tests/snapshot_test.cpp:375`，`propose failed at i=3, message=lost leadership before the log entry reached a majority`。
+  - 追加执行结果：`RaftSplitBrainTest.MinorityLeaderTimesOutAndDoesNotApplyUncommittedCommand` 单独通过 CTest 运行第 1 次失败，失败点为 `tests/test_raft_split_brain.cpp:296`，`leader_index.has_value() == false`。
+  - 通过标准：明确区分“稳定复现失败”“时序型 flaky 失败”“测试命令误匹配导致的非目标失败”。
+  - 失败时优先查看：`tests/snapshot_test.cpp`、`tests/test_raft_split_brain.cpp`、`test.sh`、`tests/CMakeLists.txt`。
+  - 是否阻塞最终验收：是。
+
+- [x] T712 复现矩阵：确认 snapshot recovery 失败触发条件
+  - 目标：判断 `RaftSnapshotRecoveryTest.SavesSnapshotAndRestoresAfterRestart` 是单测本身 flaky、`test.sh --group all` 顺序相关、还是系统负载 / timing 相关。
+  - 推荐命令：`for i in {1..10}; do ./build/tests/snapshot_test --gtest_filter='RaftSnapshotRecoveryTest.SavesSnapshotAndRestoresAfterRestart' || break; done`
+  - 推荐命令：`for i in {1..5}; do CTEST_PARALLEL_LEVEL=1 ctest --test-dir build --output-on-failure -R 'RaftSnapshotRecoveryTest.SavesSnapshotAndRestoresAfterRestart' || break; done`
+  - 推荐命令：`CTEST_PARALLEL_LEVEL=1 ./test.sh --group all`
+  - 执行结果：单独重复运行 `./build/tests/snapshot_test --gtest_filter='RaftSnapshotRecoveryTest.SavesSnapshotAndRestoresAfterRestart'` 时第 4 次失败，说明该失败不是只由完整 `test.sh --group all` 顺序触发。
+  - 执行结论：失败集中在 proposal loop 中的 leadership loss，当前证据指向测试时序 / leader churn 稳定性问题，需要进入 T713/T714 进一步判定和设计修复边界。
+  - 通过标准：能说明失败是否只在完整脚本顺序中出现，以及失败是否集中在 proposal loop 的 leadership loss。
+  - 失败时优先查看：`tests/snapshot_test.cpp` 中 propose loop、leader discovery、等待 commit/apply 的 helper。
+  - 是否阻塞最终验收：是。
+
+- [ ] T713 分析 `RaftSnapshotRecoveryTest.SavesSnapshotAndRestoresAfterRestart` 的测试假设
+  - 目标：确认测试是否假设“初始 leader 在 25 条写入期间永不变更”，以及该假设是否与当前异步 Raft + snapshot fsync IO 成本冲突。
+  - 检查点：proposal loop 是否在 leader 变更后继续向旧 leader写入。
+  - 检查点：snapshot 生成和 durable publish 是否可能拉长 IO 时间，导致 follower election timeout。
+  - 检查点：测试是否已经有 retry / re-resolve leader / wait-for-stable-leader 机制。
+  - 通过标准：给出结论是“测试稳定性问题”还是“生产 Raft 心跳 / snapshot 阻塞问题”；若是生产语义问题，停止并升级范围，不在 final validation 中顺手修改业务逻辑。
+  - 失败时优先查看：`tests/snapshot_test.cpp`、`modules/raft/node/raft_node.cpp` 的 snapshot worker / heartbeat / propose 相关路径。
+  - 是否阻塞最终验收：是。
+
+- [ ] T714 设计最小测试侧稳定化方案，不弱化恢复断言
+  - 目标：如果 T713 证明是测试时序假设问题，则只修改测试 helper，不改变 Raft 协议、持久化格式或生产逻辑。
+  - 方案要求：proposal 失败若属于 leadership loss / not leader / majority 未达成的临时状态，应重新发现当前 leader并重试 bounded 次数。
+  - 方案要求：每次重试必须仍验证最终所有 key 被提交、应用、snapshot 后重启恢复，并继续写入成功。
+  - 方案要求：不能通过跳过、删除、降低 command 数量或取消 snapshot 断言来通过测试。
+  - 通过标准：测试对合法 leader churn 稳健，但仍能发现真正的 snapshot/restart recovery 失败。
+  - 失败时优先查看：`tests/snapshot_test.cpp` 中写入循环、`WaitForLeader`、`WaitForValueOnAllNodes`、restart 后验证逻辑。
+  - 是否阻塞最终验收：是。
+
+- [ ] T715 处理 `RaftSplitBrainTest.MinorityLeaderTimesOutAndDoesNotApplyUncommittedCommand` 的误匹配与 flaky 记录
+  - 目标：确认 T701 的基础单测筛选不应误包含 split-brain 集成测试，且 split-brain 用例本身是否存在独立 flaky 风险。
+  - 方案选项：调整 Final Linux Validation checklist 的基础筛选正则，使其只匹配真正的基础单测。
+  - 方案选项：若 split-brain 重复运行仍会失败，则单独进入稳定性修复任务，不和 persistence durability 混在一起。
+  - 推荐命令：`for i in {1..10}; do ./build/tests/raft_core_tests --gtest_filter='RaftSplitBrainTest.MinorityLeaderTimesOutAndDoesNotApplyUncommittedCommand' || break; done`，实际二进制名称以构建产物为准。
+  - 追加执行结果：`CTEST_PARALLEL_LEVEL=1 ctest --test-dir build --output-on-failure -R 'RaftSplitBrainTest.MinorityLeaderTimesOutAndDoesNotApplyUncommittedCommand'` 第 1 次失败，说明该用例不只是 T701 正则误匹配问题，也存在独立 leader election timing flaky 风险。
+  - 通过标准：基础筛选不再产生无关失败；split-brain 若仍 flaky，有独立任务追踪。
+  - 失败时优先查看：`tests/test_raft_split_brain.cpp`、`specs/003-persistence-reliability/tasks.md` 的 T701 命令。
+  - 是否阻塞最终验收：是。
+
+- [ ] T716 实施前置边界确认
+  - 目标：在动手修复前确认允许修改范围，避免 final validation 修复扩大成业务逻辑变更。
+  - 默认允许范围：`tests/snapshot_test.cpp`、必要的测试 helper、`specs/003-persistence-reliability/tasks.md`、`progress.md`、`decisions.md`、最终验证报告。
+  - 默认禁止范围：生产 `.h` / `.cpp`、持久化格式、Raft 协议、KV、proto / RPC / transport。
+  - 升级条件：若证明 snapshot fsync / snapshot worker 阻塞心跳属于生产正确性问题，则停止并单独开实现阶段，不在测试稳定化任务里修。
+  - 通过标准：修复前有明确范围确认和风险分类。
+  - 失败时优先查看：根 `AGENTS.md`、`modules/raft/node/AGENTS.md`、`modules/raft/storage/AGENTS.md`、相关测试文件。
+  - 是否阻塞最终验收：是。
+
+- [ ] T717 修复后稳定性验证
+  - 目标：证明修复不是偶然通过。
+  - 推荐命令：`for i in {1..20}; do ./build/tests/snapshot_test --gtest_filter='RaftSnapshotRecoveryTest.SavesSnapshotAndRestoresAfterRestart' || break; done`
+  - 推荐命令：`CTEST_PARALLEL_LEVEL=1 ctest --test-dir build --output-on-failure -R 'RaftSnapshotRecoveryTest.SavesSnapshotAndRestoresAfterRestart|RaftSplitBrainTest.MinorityLeaderTimesOutAndDoesNotApplyUncommittedCommand'`
+  - 推荐命令：`CTEST_PARALLEL_LEVEL=1 ./test.sh --group all`
+  - 通过标准：重复 snapshot recovery 用例、相关 CTest filter、完整 `test.sh --group all` 全部通过。
+  - 失败时优先查看：最新失败日志、`tests/snapshot_test.cpp`、`tests/test_raft_split_brain.cpp`。
+  - 是否阻塞最终验收：是。
+
+- [ ] T718 更新最终 Linux 验收状态
+  - 目标：修复并验证后，把 T701-T710 的执行结果和 remaining risk 写回最终验收记录。
+  - 记录要求：Linux 测试结果、曾发生的 flaky 失败、修复方式、重跑次数、仍未覆盖的 Windows / true power loss / exact failure injection 缺口。
+  - 通过标准：最终记录不能声称 Windows 已验证，不能把 crash-like 测试写成真实 power loss 证明。
+  - 失败时优先查看：`specs/003-persistence-reliability/phase-reports/final-persistence-validation-plan.md`、`progress.md`、`decisions.md`。
+  - 是否阻塞最终验收：是。
