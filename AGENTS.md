@@ -15,6 +15,7 @@
 - 平台相关的 durability 代码不允许静默降级。
 - 如果一个平台实现了真实持久化语义，其他平台分支必须提供等价行为、返回明确错误，或在 durability contract 中明确记录较弱保证。
 - 对 required durability operations，不允许使用 no-op 后直接返回成功的实现。
+- 按 AGENTS.md 执行。测试日志不要全文输出。通过只报 PASS；失败只报失败摘要、关键断言、失败分类、最后 50 行日志和完整日志文件路径。
 
 ## C++ 头文件 / 源文件规则
 
@@ -98,6 +99,24 @@ cmake --build --preset debug-ninja-safe
 
 ```bash
 CTEST_PARALLEL_LEVEL=1 ./test.sh --group all
+```
+
+## Test Log Output Rules
+- 不要把完整测试日志粘贴到聊天里。
+- 测试日志应保存到本地文件，例如 `tmp/test-logs/`。
+- 测试通过时，只输出：
+  - 测试命令
+  - PASS
+  - 总耗时
+- 测试失败时，只输出：
+  - 失败测试名
+  - 关键断言
+  - 失败分类
+  - 最后 50 行日志
+  - 本地完整日志文件路径
+- 不要输出完整 Raft 节点日志，除非用户明确要求。
+- 优先使用 `tail -n 50`、`grep -E`、`rg` 提取关键失败信息。
+- 不要为了展示日志而重复运行测试。
 ```
 
 ## Include 规则

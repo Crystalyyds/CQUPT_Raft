@@ -67,7 +67,35 @@ cross-platform gaps are scheduled for follow-up work.
 | `./test.sh --group diagnosis` | Focused diagnostics rerun | Industrialization hotspot | Partially | Optional via `--keep-data` | Main failure-localization bucket |
 | `./test.sh --group snapshot-catchup` | Focused catch-up rerun | US2 regression | No | Optional via `--keep-data` | Cluster consistency evidence |
 | `./test.sh --group replicator` | Focused replicator rerun | US2 regression | No | Optional via `--keep-data` | Follower synchronization evidence |
+| `./test.sh --group segment-cluster` | Focused clustered segment/snapshot stress rerun | US2/US3 regression | Partially | Optional via `--keep-data` | Main segment rollover and retained-artifact stress bucket |
 | `ctest --preset debug-tests --output-on-failure` | Platform-neutral fallback | Cross-platform baseline execution contract | No | No | Must remain valid outside Bash-first flows |
+
+## Grouped Linux Rerun Guide
+
+Use the following groups as the primary Linux rerun buckets for failure
+localization. Unless a narrower command is required, prefer
+`CTEST_PARALLEL_LEVEL=1` and add `--keep-data` when restart/snapshot/segment
+artifacts are needed for diagnosis.
+
+| Group | Primary purpose | Failure classification focus | Linux primary / Linux-specific | Minimal rerun command | When to add `--keep-data` | Platform-neutral fallback |
+|------|------------------|------------------------------|-------------------------------|-----------------------|---------------------------|---------------------------|
+| `snapshot-recovery` | Snapshot/restart recovery path | leader churn during recovery, snapshot restore failure, restart trusted-state mismatch | Linux primary hotspot | `CTEST_PARALLEL_LEVEL=1 ./test.sh --group snapshot-recovery` | When restart artifacts, snapshot dirs, or retained node data are needed | `CTEST_PARALLEL_LEVEL=1 ctest --test-dir build --output-on-failure -R '^RaftSnapshotRecoveryTest\.'` |
+| `diagnosis` | Recovery diagnostics and snapshot fallback | snapshot skip/fallback, invalid snapshot rejection, restart explanation gaps | Linux primary hotspot | `CTEST_PARALLEL_LEVEL=1 ./test.sh --group diagnosis` | When snapshot skip/fallback evidence must be retained | `CTEST_PARALLEL_LEVEL=1 ctest --test-dir build --output-on-failure -R '^RaftSnapshotDiagnosisTest\.'` |
+| `snapshot-catchup` | Lagging follower catch-up and snapshot handoff | follower catch-up gap, snapshot handoff sequencing, restart after catch-up | Linux primary grouped rerun | `CTEST_PARALLEL_LEVEL=1 ./test.sh --group snapshot-catchup` | When follower catch-up state or retained snapshot/log artifacts are needed | `CTEST_PARALLEL_LEVEL=1 ctest --test-dir build --output-on-failure -R '^RaftSnapshotCatchupTest\.'` |
+| `replicator` | Single follower replication state machine | replication state drift, backoff, follower catch-up behavior | Linux primary grouped rerun | `CTEST_PARALLEL_LEVEL=1 ./test.sh --group replicator` | When retained per-node data helps explain replication drift | `CTEST_PARALLEL_LEVEL=1 ctest --test-dir build --output-on-failure -R '^RaftReplicatorBehaviorTest\.'` |
+| `segment-cluster` | Clustered segment/snapshot stress path | segment rollover, clustered snapshot generation, retained-artifact stress failures | Linux primary grouped rerun | `CTEST_PARALLEL_LEVEL=1 ./test.sh --group segment-cluster` | When generated segment/snapshot trees must be inspected | `CTEST_PARALLEL_LEVEL=1 ctest --test-dir build --output-on-failure -R '^RaftSegmentStorageTest\.RaftClusterGeneratesManySnapshotsAndSegmentLogsUnderBuildDirectory$'` |
+
+Notes:
+
+- `--keep-data` is a Linux Bash-first capability. It retains `raft_data/`,
+  `raft_snapshots/`, and `build/tests/raft_test_data/` for local diagnosis.
+- For Windows/macOS, the fallback entry remains
+  `ctest --preset debug-tests --output-on-failure` or the corresponding direct
+  `ctest --test-dir build ... -R ...` command. These fallbacks provide logic
+  regression only and do not claim Linux-equivalent retained-artifact or
+  crash-style runtime evidence.
+- The rerun groups above are not a replacement for the full Linux primary path;
+  they exist to narrow failures after a grouped run or a targeted investigation.
 
 ## Linux-Specific Boundaries
 

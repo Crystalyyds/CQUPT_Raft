@@ -85,7 +85,7 @@
   Result: `Passed`, `1/1 tests passed`
   Execution Note: 修改文件为 `tests/test_raft_split_brain.cpp`；本次未修改生产代码；`--repeat until-fail:3` 未执行，因此无 repeat 结果可记录。
 
-- [ ] T005 Update `test.sh` comments/output and `specs/004-raft-industrialization/validation-matrix.md`
+- [x] T005 Update `test.sh` comments/output and `specs/004-raft-industrialization/validation-matrix.md`
   Goal: 给当前已知 blocker 和高风险回归组补上保留数据、低并发 rerun 和失败定位提示。
   Input: `test.sh`, `validation-matrix.md`, `quickstart.md`.
   Scope: 修改脚本注释或输出提示，以及矩阵文档；不改生产代码。

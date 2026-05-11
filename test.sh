@@ -3,31 +3,19 @@ set -Eeuo pipefail
 
 # Run Raft project tests in a stable, grouped order.
 #
-# Usage:
-#   ./test.sh
-#   ./test.sh --clean
-#   ./test.sh --skip-configure
-#   ./test.sh --skip-build
-#   ./test.sh --keep-data
-#   ./test.sh --group persistence
-#   ./test.sh --group all
+# Low-concurrency recommendation:
+#   CTEST_PARALLEL_LEVEL=1 ./test.sh --group snapshot-recovery
 #
-# Groups:
-#   unit
-#   snapshot-storage
-#   kv-service
-#   segment-basic
-#   election
-#   replication
-#   persistence
-#   snapshot-recovery
-#   integration
-#   snapshot-catchup
-#   snapshot-restart
-#   diagnosis
-#   replicator
-#   segment-cluster
-#   all
+# Keep-data recommendation:
+#   Use --keep-data for Linux-primary reruns when you need to retain
+#   raft_data / raft_snapshots / build/tests/raft_test_data for diagnosis.
+#
+# High-risk rerun groups:
+#   snapshot-recovery  snapshot / restart recovery hotspot
+#   diagnosis          recovery diagnostics and snapshot fallback hotspot
+#   snapshot-catchup   follower catch-up and snapshot handoff
+#   replicator         single follower replication behavior
+#   segment-cluster    segment / snapshot stress path under clustered load
 
 PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 BUILD_DIR="${PROJECT_ROOT}/build"
@@ -44,7 +32,53 @@ PROTO_JOBS="${RAFT_PROTO_JOBS:-1}"
 TEST_JOBS="${CTEST_PARALLEL_LEVEL:-1}"
 
 print_usage() {
-  sed -n '1,34p' "$0"
+  cat <<'EOF'
+Usage:
+  ./test.sh
+  ./test.sh --clean
+  ./test.sh --skip-configure
+  ./test.sh --skip-build
+  ./test.sh --keep-data
+  ./test.sh --group persistence
+  ./test.sh --group all
+
+Low-concurrency recommendation:
+  CTEST_PARALLEL_LEVEL=1 ./test.sh --group snapshot-recovery
+  CTEST_PARALLEL_LEVEL=1 ./test.sh --group diagnosis --keep-data
+
+--keep-data:
+  Keep Linux test artifacts under raft_data / raft_snapshots /
+  build/tests/raft_test_data for failure diagnosis.
+  Use it when investigating restart, snapshot, catch-up, replicator, or
+  segment-cluster failures. This is a Linux Bash-first workflow.
+
+Groups:
+  unit               Basic unit tests for commands, scheduler, and thread pool
+  snapshot-storage   Snapshot storage reliability coverage
+  kv-service         KV service redirect and read/write behavior
+  segment-basic      Focused segment storage persistence cases
+  election           Leader election and split-brain related checks
+  replication        Log replication and commit/apply progression
+  persistence        Restart recovery and hard-state/log trusted-state checks
+  snapshot-recovery  Snapshot/restart recovery hotspot (Linux primary)
+  integration        Multi-node Raft integration scenarios
+  snapshot-catchup   Lagging follower catch-up and snapshot handoff
+  snapshot-restart   Restart after compacted snapshot scenarios
+  diagnosis          Recovery diagnosis and snapshot fallback hotspot (Linux primary)
+  replicator         Single follower replication and catch-up behavior
+  segment-cluster    Clustered segment/snapshot stress path
+  all                Grouped Linux primary sweep followed by full-suite check
+
+High-risk rerun commands:
+  CTEST_PARALLEL_LEVEL=1 ./test.sh --group snapshot-recovery --keep-data
+  CTEST_PARALLEL_LEVEL=1 ./test.sh --group diagnosis --keep-data
+  CTEST_PARALLEL_LEVEL=1 ./test.sh --group snapshot-catchup --keep-data
+  CTEST_PARALLEL_LEVEL=1 ./test.sh --group replicator --keep-data
+  CTEST_PARALLEL_LEVEL=1 ./test.sh --group segment-cluster --keep-data
+
+Platform-neutral fallback:
+  ctest --preset debug-tests --output-on-failure
+EOF
 }
 
 while [[ $# -gt 0 ]]; do
@@ -94,6 +128,74 @@ log_section() {
   echo "============================================================"
 }
 
+print_group_guidance() {
+  local group="$1"
+
+  case "${group}" in
+    snapshot-recovery)
+      echo "Purpose: snapshot / restart recovery hotspot (Linux primary)."
+      echo "Hint: prefer CTEST_PARALLEL_LEVEL=1; add --keep-data to retain recovery artifacts."
+      ;;
+    diagnosis)
+      echo "Purpose: recovery diagnosis, snapshot fallback, and failure localization hotspot (Linux primary)."
+      echo "Hint: prefer CTEST_PARALLEL_LEVEL=1; add --keep-data when investigating snapshot skip / fallback."
+      ;;
+    snapshot-catchup)
+      echo "Purpose: lagging follower catch-up and snapshot handoff validation."
+      echo "Hint: prefer CTEST_PARALLEL_LEVEL=1; add --keep-data when follower catch-up state needs inspection."
+      ;;
+    replicator)
+      echo "Purpose: single follower replication state machine and catch-up behavior."
+      echo "Hint: prefer CTEST_PARALLEL_LEVEL=1; add --keep-data when diagnosing replication state drift."
+      ;;
+    segment-cluster)
+      echo "Purpose: clustered segment / snapshot stress path."
+      echo "Hint: prefer CTEST_PARALLEL_LEVEL=1; add --keep-data to retain generated segment and snapshot artifacts."
+      ;;
+  esac
+}
+
+print_failure_rerun_hint() {
+  local group="$1"
+
+  echo
+  echo "Failure localization hints:"
+  echo "  - Low-concurrency recommendation: CTEST_PARALLEL_LEVEL=1"
+  echo "  - Keep Linux artifacts when needed: --keep-data"
+
+  case "${group}" in
+    snapshot-recovery)
+      echo "  - Rerun: CTEST_PARALLEL_LEVEL=1 ./test.sh --group snapshot-recovery --keep-data"
+      echo "  - CTest fallback: CTEST_PARALLEL_LEVEL=1 ctest --test-dir \"${BUILD_DIR}\" --output-on-failure -R '^RaftSnapshotRecoveryTest\\.'"
+      echo "  - Failure focus: leader churn during recovery, snapshot restore, restart trusted-state."
+      ;;
+    diagnosis)
+      echo "  - Rerun: CTEST_PARALLEL_LEVEL=1 ./test.sh --group diagnosis --keep-data"
+      echo "  - CTest fallback: CTEST_PARALLEL_LEVEL=1 ctest --test-dir \"${BUILD_DIR}\" --output-on-failure -R '^RaftSnapshotDiagnosisTest\\.'"
+      echo "  - Failure focus: snapshot skip/fallback, restart diagnostics, trusted-state explanation."
+      ;;
+    snapshot-catchup)
+      echo "  - Rerun: CTEST_PARALLEL_LEVEL=1 ./test.sh --group snapshot-catchup --keep-data"
+      echo "  - CTest fallback: CTEST_PARALLEL_LEVEL=1 ctest --test-dir \"${BUILD_DIR}\" --output-on-failure -R '^RaftSnapshotCatchupTest\\.'"
+      echo "  - Failure focus: follower catch-up via log replay or snapshot handoff."
+      ;;
+    replicator)
+      echo "  - Rerun: CTEST_PARALLEL_LEVEL=1 ./test.sh --group replicator --keep-data"
+      echo "  - CTest fallback: CTEST_PARALLEL_LEVEL=1 ctest --test-dir \"${BUILD_DIR}\" --output-on-failure -R '^RaftReplicatorBehaviorTest\\.'"
+      echo "  - Failure focus: follower replication state machine and catch-up behavior."
+      ;;
+    segment-cluster)
+      echo "  - Rerun: CTEST_PARALLEL_LEVEL=1 ./test.sh --group segment-cluster --keep-data"
+      echo "  - CTest fallback: CTEST_PARALLEL_LEVEL=1 ctest --test-dir \"${BUILD_DIR}\" --output-on-failure -R '^RaftSegmentStorageTest\\.RaftClusterGeneratesManySnapshotsAndSegmentLogsUnderBuildDirectory$'"
+      echo "  - Failure focus: segment rollover, clustered snapshot generation, retained artifacts under load."
+      ;;
+    *)
+      echo "  - Rerun: CTEST_PARALLEL_LEVEL=1 ./test.sh --group ${group}"
+      echo "  - Platform-neutral fallback: ctest --preset debug-tests --output-on-failure"
+      ;;
+  esac
+}
+
 clean_test_data() {
   log_section "Cleaning old Raft test data"
   rm -rf "${PROJECT_ROOT}/raft_data"
@@ -121,14 +223,25 @@ build_project() {
 run_ctest_group() {
   local name="$1"
   local regex="$2"
+  local status=0
 
   log_section "Running test group: ${name}"
+  print_group_guidance "${name}"
   if [[ "${KEEP_DATA}" -eq 1 ]]; then
-    RAFT_TEST_KEEP_DATA=1 ctest --test-dir "${BUILD_DIR}" -j"${TEST_JOBS}" \
-      --output-on-failure --stop-on-failure -R "${regex}"
+    if ! RAFT_TEST_KEEP_DATA=1 ctest --test-dir "${BUILD_DIR}" -j"${TEST_JOBS}" \
+      --output-on-failure --stop-on-failure -R "${regex}"; then
+      status=$?
+    fi
   else
-    ctest --test-dir "${BUILD_DIR}" -j"${TEST_JOBS}" \
-      --output-on-failure --stop-on-failure -R "${regex}"
+    if ! ctest --test-dir "${BUILD_DIR}" -j"${TEST_JOBS}" \
+      --output-on-failure --stop-on-failure -R "${regex}"; then
+      status=$?
+    fi
+  fi
+
+  if [[ "${status}" -ne 0 ]]; then
+    print_failure_rerun_hint "${name}"
+    return "${status}"
   fi
 }
 
