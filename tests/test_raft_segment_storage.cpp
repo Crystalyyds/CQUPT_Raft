@@ -281,6 +281,83 @@ namespace raftdemo
       ASSERT_TRUE(static_cast<bool>(out)) << "failed to write " << path.string();
     }
 
+    void SetEnvVar(const char *name, const char *value)
+    {
+#if defined(_WIN32)
+      ASSERT_EQ(_putenv_s(name, value), 0);
+#else
+      ASSERT_EQ(setenv(name, value, 1), 0);
+#endif
+    }
+
+    void UnsetEnvVar(const char *name)
+    {
+#if defined(_WIN32)
+      ASSERT_EQ(_putenv_s(name, ""), 0);
+#else
+      ASSERT_EQ(unsetenv(name), 0);
+#endif
+    }
+
+    class ScopedEnvVar
+    {
+    public:
+      ScopedEnvVar(const char *name, const char *value) : name_(name)
+      {
+        const char *existing = std::getenv(name_);
+        if (existing != nullptr)
+        {
+          had_old_value_ = true;
+          old_value_ = existing;
+        }
+        SetEnvVar(name_, value);
+      }
+
+      ~ScopedEnvVar()
+      {
+        if (had_old_value_)
+        {
+          SetEnvVar(name_, old_value_.c_str());
+        }
+        else
+        {
+          UnsetEnvVar(name_);
+        }
+      }
+
+    private:
+      const char *name_;
+      bool had_old_value_{false};
+      std::string old_value_;
+    };
+
+    void ExpectInjectedFailure(const std::string &error,
+                               const std::string &operation,
+                               const std::filesystem::path &path,
+                               const std::string &trusted_state_expectation)
+    {
+      EXPECT_NE(error.find("injected durability failure"), std::string::npos) << error;
+      EXPECT_NE(error.find("operation=" + operation), std::string::npos) << error;
+      EXPECT_NE(error.find("path=" + path.string()), std::string::npos) << error;
+      EXPECT_NE(error.find("linux_specific=true"), std::string::npos) << error;
+      EXPECT_NE(error.find("trusted_state_expectation=" + trusted_state_expectation), std::string::npos)
+          << error;
+    }
+
+    void ExpectLoadedStateMatches(const PersistentRaftState &loaded,
+                                  const PersistentRaftState &expected)
+    {
+      EXPECT_EQ(loaded.current_term, expected.current_term);
+      EXPECT_EQ(loaded.voted_for, expected.voted_for);
+      EXPECT_EQ(loaded.commit_index, expected.commit_index);
+      EXPECT_EQ(loaded.last_applied, expected.last_applied);
+      ASSERT_EQ(loaded.log.size(), expected.log.size());
+      ASSERT_FALSE(loaded.log.empty());
+      EXPECT_EQ(loaded.log.front().index, expected.log.front().index);
+      EXPECT_EQ(loaded.log.back().index, expected.log.back().index);
+      EXPECT_EQ(loaded.log.back().command, expected.log.back().command);
+    }
+
     bool IsLeaderNode(const std::shared_ptr<RaftNode> &node)
     {
       return node != nullptr && Contains(node->Describe(), "role=Leader");
@@ -960,6 +1037,126 @@ namespace raftdemo
       ASSERT_FALSE(storage->Load(&rejected, &has_state, &error));
       EXPECT_FALSE(has_state);
       EXPECT_NE(error.find("log count mismatch"), std::string::npos) << error;
+    }
+
+    TEST_F(RaftSegmentStorageTest, LogDirectoryReplaceFailureNeedsExactFailureInjectionSeam)
+    {
+      const auto storage_root = data_root_ / "direct_storage_log_replace_injection_contract";
+      const auto saved_root = root_ / "saved_log_replace_states";
+      auto storage = CreateFileRaftStorage(storage_root.string());
+      const auto old_state = MakeState(1, 16);
+      const auto new_state = MakeState(1, 32);
+      const std::string trusted_state_expectation =
+          "restart must keep the previously durable segment set and must not trust a partially published newer log boundary when replacing log/ fails";
+      std::string error;
+
+      ASSERT_TRUE(storage->Save(old_state, &error)) << error;
+
+      std::error_code ec;
+      std::filesystem::create_directories(saved_root, ec);
+      ASSERT_FALSE(ec) << ec.message();
+      std::filesystem::copy(storage_root / "log", saved_root / "old_log",
+                            std::filesystem::copy_options::recursive |
+                                std::filesystem::copy_options::overwrite_existing,
+                            ec);
+      ASSERT_FALSE(ec) << ec.message();
+
+      {
+        ScopedEnvVar failpoint("RAFT_TEST_STORAGE_FAILPOINT", "log_directory_replace");
+        ASSERT_FALSE(storage->Save(new_state, &error));
+      }
+      ExpectInjectedFailure(error,
+                            "log directory replace",
+                            storage_root / "log",
+                            trusted_state_expectation);
+
+      std::filesystem::remove_all(storage_root / "log", ec);
+      ec.clear();
+      std::filesystem::copy(saved_root / "old_log", storage_root / "log",
+                            std::filesystem::copy_options::recursive |
+                                std::filesystem::copy_options::overwrite_existing,
+                            ec);
+      ASSERT_FALSE(ec) << ec.message();
+
+      PersistentRaftState loaded;
+      bool has_state = false;
+      ASSERT_TRUE(storage->Load(&loaded, &has_state, &error)) << error;
+      ASSERT_TRUE(has_state);
+      ExpectLoadedStateMatches(loaded, old_state);
+    }
+
+    TEST_F(RaftSegmentStorageTest, LogDirectorySyncFailureNeedsExactFailureInjectionSeam)
+    {
+      const auto storage_root = data_root_ / "direct_storage_log_directory_sync_injection_contract";
+      const auto saved_root = root_ / "saved_log_directory_sync_states";
+      auto storage = CreateFileRaftStorage(storage_root.string());
+      const auto old_state = MakeState(1, 16);
+      const auto new_state = MakeState(1, 32);
+      const std::string trusted_state_expectation =
+          "restart must stay bounded by the last fully durable segment publish if the new log tree becomes visible but the parent directory sync does not complete";
+      std::string error;
+
+      ASSERT_TRUE(storage->Save(old_state, &error)) << error;
+
+      std::error_code ec;
+      std::filesystem::create_directories(saved_root, ec);
+      ASSERT_FALSE(ec) << ec.message();
+      std::filesystem::copy(storage_root / "log", saved_root / "old_log",
+                            std::filesystem::copy_options::recursive |
+                                std::filesystem::copy_options::overwrite_existing,
+                            ec);
+      ASSERT_FALSE(ec) << ec.message();
+
+      {
+        ScopedEnvVar failpoint("RAFT_TEST_STORAGE_FAILPOINT", "log_directory_sync");
+        ASSERT_FALSE(storage->Save(new_state, &error));
+      }
+      ExpectInjectedFailure(error,
+                            "log parent directory sync after publish",
+                            storage_root,
+                            trusted_state_expectation);
+
+      std::filesystem::remove_all(storage_root / "log", ec);
+      ec.clear();
+      std::filesystem::copy(saved_root / "old_log", storage_root / "log",
+                            std::filesystem::copy_options::recursive |
+                                std::filesystem::copy_options::overwrite_existing,
+                            ec);
+      ASSERT_FALSE(ec) << ec.message();
+
+      PersistentRaftState loaded;
+      bool has_state = false;
+      ASSERT_TRUE(storage->Load(&loaded, &has_state, &error)) << error;
+      ASSERT_TRUE(has_state);
+      ExpectLoadedStateMatches(loaded, old_state);
+    }
+
+    TEST_F(RaftSegmentStorageTest, FinalSegmentPartialWriteNeedsExactFailureInjectionSeam)
+    {
+      const auto storage_root = data_root_ / "direct_storage_partial_write_injection_contract";
+      auto storage = CreateFileRaftStorage(storage_root.string());
+      const auto old_state = MakeState(1, 16);
+      const auto new_state = MakeState(1, 900);
+      const std::string trusted_state_expectation =
+          "save must fail before publishing the new log directory, so restart stays on the previously durable log boundary and ignores the partially written temp segment";
+      std::string error;
+
+      ASSERT_TRUE(storage->Save(old_state, &error)) << error;
+
+      {
+        ScopedEnvVar failpoint("RAFT_TEST_STORAGE_FAILPOINT", "final_segment_partial_write");
+        ASSERT_FALSE(storage->Save(new_state, &error));
+      }
+      ExpectInjectedFailure(error,
+                            "final segment partial write during save",
+                            storage_root / "log.tmp" / "segment_00000000000000000513.log",
+                            trusted_state_expectation);
+
+      PersistentRaftState loaded;
+      bool has_state = false;
+      ASSERT_TRUE(storage->Load(&loaded, &has_state, &error)) << error;
+      ASSERT_TRUE(has_state);
+      ExpectLoadedStateMatches(loaded, old_state);
     }
 
     TEST_F(RaftSegmentStorageTest, MissingMetaFileCausesLoadToReportNoPersistedState)

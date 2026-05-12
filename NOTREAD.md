@@ -7,3 +7,4 @@
 /raft_snapshots
 /raft_test_data
 /deploy
+/tmp

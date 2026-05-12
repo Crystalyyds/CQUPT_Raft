@@ -109,7 +109,7 @@
 
 ### Tests for User Story 1
 
-- [ ] T006 [P] [US1] Add meta/log durability failure cases in `tests/persistence_test.cpp` and `tests/test_raft_segment_storage.cpp`
+- [x] T006 [P] [US1] Add meta/log durability failure cases in `tests/persistence_test.cpp` and `tests/test_raft_segment_storage.cpp`
   Goal: 先写失败测试，覆盖 `meta.bin` / segment log 的 file sync、directory sync、replace/partial-write 边界。
   Input: `tests/persistence_test.cpp`, `tests/test_raft_segment_storage.cpp`, `contracts/failure-injection-boundaries.md`, `specs/003-persistence-reliability/progress.md`.
   Scope: 只改测试文件，先表达预期 trusted-state 结果和诊断要求。
@@ -150,7 +150,7 @@
 
 ### Implementation for User Story 1
 
-- [ ] T009 [US1] Introduce an opt-in internal failure injection seam in `modules/raft/storage/raft_storage.cpp`
+- [x] T009 [US1] Introduce an opt-in internal failure injection seam in `modules/raft/storage/raft_storage.cpp`
   Goal: 为 meta/log 的 exact failure injection 提供最小内部注入点，默认关闭且不改变成功路径语义。
   Input: `modules/raft/storage/raft_storage.cpp`, `contracts/failure-injection-boundaries.md`, `research.md`, T006.
   Scope: 仅改 `modules/raft/storage/raft_storage.cpp`；必要时新增 storage 内部 helper，但不得暴露公共 API。

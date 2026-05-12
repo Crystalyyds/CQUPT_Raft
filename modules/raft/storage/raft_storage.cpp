@@ -5,6 +5,7 @@
 #include <cerrno>
 #include <cstdint>
 #include <cstring>
+#include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <iomanip>
@@ -53,6 +54,90 @@ namespace raftdemo
     // Hard safety guard for corrupt input. Real Raft entries in this project are
     // small string commands, so 64 MiB is intentionally generous.
     constexpr std::uint64_t kMaxCommandBytes = 64ULL * 1024ULL * 1024ULL;
+
+    constexpr const char *kStorageFailpointEnv = "RAFT_TEST_STORAGE_FAILPOINT";
+
+    enum class StorageFailpoint
+    {
+      kNone,
+      kMetaFileSync,
+      kMetaDirectorySync,
+      kLogDirectoryReplace,
+      kLogDirectorySync,
+      kFinalSegmentPartialWrite,
+    };
+
+    StorageFailpoint CurrentStorageFailpoint()
+    {
+      const char *value = std::getenv(kStorageFailpointEnv);
+      if (value == nullptr)
+      {
+        return StorageFailpoint::kNone;
+      }
+
+      const std::string failpoint(value);
+      if (failpoint == "meta_file_sync")
+      {
+        return StorageFailpoint::kMetaFileSync;
+      }
+      if (failpoint == "meta_directory_sync")
+      {
+        return StorageFailpoint::kMetaDirectorySync;
+      }
+      if (failpoint == "log_directory_replace")
+      {
+        return StorageFailpoint::kLogDirectoryReplace;
+      }
+      if (failpoint == "log_directory_sync")
+      {
+        return StorageFailpoint::kLogDirectorySync;
+      }
+      if (failpoint == "final_segment_partial_write")
+      {
+        return StorageFailpoint::kFinalSegmentPartialWrite;
+      }
+      return StorageFailpoint::kNone;
+    }
+
+    bool IsStorageFailpointActive(StorageFailpoint failpoint)
+    {
+      return CurrentStorageFailpoint() == failpoint;
+    }
+
+    std::string BuildInjectedFailureMessage(const char *operation,
+                                           const std::filesystem::path &path,
+                                           const char *trusted_state_expectation)
+    {
+      std::ostringstream oss;
+      oss << "injected durability failure"
+          << ", operation=" << operation
+          << ", path=" << path.string()
+#if defined(__linux__)
+          << ", linux_specific=true"
+#else
+          << ", linux_specific=false"
+#endif
+          << ", trusted_state_expectation=" << trusted_state_expectation;
+      return oss.str();
+    }
+
+    bool InjectFailureIfRequested(StorageFailpoint failpoint,
+                                  const char *operation,
+                                  const std::filesystem::path &path,
+                                  const char *trusted_state_expectation,
+                                  std::string *error)
+    {
+      if (!IsStorageFailpointActive(failpoint))
+      {
+        return false;
+      }
+
+      if (error != nullptr)
+      {
+        *error = BuildInjectedFailureMessage(operation, path, trusted_state_expectation);
+      }
+      return true;
+    }
 
     struct SegmentEntryHeader
     {
@@ -308,6 +393,14 @@ namespace raftdemo
       }
 
       const std::filesystem::path parent_dir = dst.parent_path();
+      if (InjectFailureIfRequested(StorageFailpoint::kMetaDirectorySync,
+                                   "meta.bin parent directory sync after replace",
+                                   parent_dir,
+                                   "restart must stay on the previously trusted hard-state boundary if the new meta publish reached rename/replace but the parent directory sync did not complete",
+                                   error))
+      {
+        return false;
+      }
       if (!parent_dir.empty() && !SyncDirectory(parent_dir, error))
       {
         return false;
@@ -530,6 +623,23 @@ namespace raftdemo
         return false;
       }
 
+      if (is_final_segment &&
+          IsStorageFailpointActive(StorageFailpoint::kFinalSegmentPartialWrite))
+      {
+        const char partial_header = '\x42';
+        out->write(&partial_header, 1);
+        out->flush();
+        out->close();
+        if (error != nullptr)
+        {
+          *error = BuildInjectedFailureMessage(
+              "final segment partial write during save",
+              segment_path,
+              "save must fail before publishing the new log directory, so restart stays on the previously durable log boundary and ignores the partially written temp segment");
+        }
+        return false;
+      }
+
       if (!SyncFile(segment_path, error))
       {
         return false;
@@ -571,6 +681,14 @@ namespace raftdemo
       }
 
       ec.clear();
+      if (InjectFailureIfRequested(StorageFailpoint::kLogDirectoryReplace,
+                                   "log directory replace",
+                                   dst,
+                                   "restart must keep the previously durable segment set and must not trust a partially published newer log boundary when replacing log/ fails",
+                                   error))
+      {
+        return false;
+      }
       std::filesystem::rename(src, dst, ec);
       if (ec)
       {
@@ -587,6 +705,14 @@ namespace raftdemo
       }
 
       const std::filesystem::path parent_dir = dst.parent_path();
+      if (InjectFailureIfRequested(StorageFailpoint::kLogDirectorySync,
+                                   "log parent directory sync after publish",
+                                   parent_dir,
+                                   "restart must stay bounded by the last fully durable segment publish if the new log tree becomes visible but the parent directory sync does not complete",
+                                   error))
+      {
+        return false;
+      }
       if (!parent_dir.empty() && !SyncDirectory(parent_dir, error))
       {
         return false;
@@ -916,11 +1042,19 @@ namespace raftdemo
           if (error != nullptr)
           {
             *error = "close temp meta file failed";
-          }
-          return false;
         }
-        return SyncFile(meta_path, error);
+        return false;
       }
+      if (InjectFailureIfRequested(StorageFailpoint::kMetaFileSync,
+                                   "meta.bin file sync",
+                                   meta_path,
+                                   "restart must keep the previously durable term/vote/commit_index/last_applied and must not expose newer hard state when meta file data was not durably synced",
+                                   error))
+      {
+        return false;
+      }
+      return SyncFile(meta_path, error);
+    }
 
       bool LoadSegments(const std::filesystem::path &log_dir,
                         std::uint64_t first_log_index,

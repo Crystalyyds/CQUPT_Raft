@@ -223,6 +223,89 @@ namespace raftdemo
       return snapshot_config;
     }
 
+    PersistentRaftState MakePersistenceState(std::uint64_t first_index, std::uint64_t last_index)
+    {
+      PersistentRaftState state;
+      state.current_term = 5;
+      state.voted_for = 1;
+      state.commit_index = last_index;
+      state.last_applied = last_index;
+
+      for (std::uint64_t index = first_index; index <= last_index; ++index)
+      {
+        Command command;
+        command.type = CommandType::kSet;
+        command.key = "boundary_key_" + std::to_string(index);
+        command.value = "boundary_value_" + std::to_string(index);
+        state.log.push_back(LogRecord{index, 5, command.Serialize()});
+      }
+
+      return state;
+    }
+
+    void SetEnvVar(const char *name, const char *value)
+    {
+#if defined(_WIN32)
+      ASSERT_EQ(_putenv_s(name, value), 0);
+#else
+      ASSERT_EQ(setenv(name, value, 1), 0);
+#endif
+    }
+
+    void UnsetEnvVar(const char *name)
+    {
+#if defined(_WIN32)
+      ASSERT_EQ(_putenv_s(name, ""), 0);
+#else
+      ASSERT_EQ(unsetenv(name), 0);
+#endif
+    }
+
+    class ScopedEnvVar
+    {
+    public:
+      ScopedEnvVar(const char *name, const char *value) : name_(name)
+      {
+        const char *existing = std::getenv(name_);
+        if (existing != nullptr)
+        {
+          had_old_value_ = true;
+          old_value_ = existing;
+        }
+        SetEnvVar(name_, value);
+      }
+
+      ~ScopedEnvVar()
+      {
+        if (had_old_value_)
+        {
+          SetEnvVar(name_, old_value_.c_str());
+        }
+        else
+        {
+          UnsetEnvVar(name_);
+        }
+      }
+
+    private:
+      const char *name_;
+      bool had_old_value_{false};
+      std::string old_value_;
+    };
+
+    void ExpectInjectedFailure(const std::string &error,
+                               const std::string &operation,
+                               const fs::path &path,
+                               const std::string &trusted_state_expectation)
+    {
+      EXPECT_NE(error.find("injected durability failure"), std::string::npos) << error;
+      EXPECT_NE(error.find("operation=" + operation), std::string::npos) << error;
+      EXPECT_NE(error.find("path=" + path.string()), std::string::npos) << error;
+      EXPECT_NE(error.find("linux_specific=true"), std::string::npos) << error;
+      EXPECT_NE(error.find("trusted_state_expectation=" + trusted_state_expectation), std::string::npos)
+          << error;
+    }
+
     RunningCluster StartCluster(const std::vector<NodeConfig> &configs, const fs::path &test_root)
     {
       RunningCluster cluster;
@@ -577,6 +660,179 @@ namespace raftdemo
       std::string actual;
       EXPECT_TRUE(restarted->DebugGetValue("clamp_key_3", &actual));
       EXPECT_EQ(actual, "clamp_value_3");
+    }
+
+    TEST(PersistenceTest, ColdRestartUsesPreviouslyTrustedMetaBoundaryWhenNewLogPublishesBeforeMeta)
+    {
+      ScopedDataDir scoped_dir("test_restart_old_meta_new_log_boundary");
+
+      NodeConfig config;
+      config.node_id = 1;
+      config.address = "127.0.0.1:" + std::to_string(RandomBasePort());
+      config.election_timeout_min = std::chrono::milliseconds(250);
+      config.election_timeout_max = std::chrono::milliseconds(400);
+      config.heartbeat_interval = std::chrono::milliseconds(80);
+      config.rpc_deadline = std::chrono::milliseconds(500);
+      config.data_dir = (scoped_dir.path() / "raft_data" / "node_1").string();
+
+      const fs::path storage_root = config.data_dir;
+      const fs::path saved_root = scoped_dir.path() / "saved_publish_states";
+      auto storage = CreateFileRaftStorage(config.data_dir);
+      const auto old_state = MakePersistenceState(1, 3);
+      const auto new_state = MakePersistenceState(1, 5);
+      std::string error;
+
+      ASSERT_TRUE(storage->Save(old_state, &error)) << error;
+
+      std::error_code ec;
+      fs::create_directories(saved_root, ec);
+      ASSERT_FALSE(ec) << ec.message();
+      fs::copy_file(storage_root / "meta.bin", saved_root / "old_meta.bin",
+                    fs::copy_options::overwrite_existing, ec);
+      ASSERT_FALSE(ec) << ec.message();
+
+      ASSERT_TRUE(storage->Save(new_state, &error)) << error;
+
+      // Simulate a crash after the newer log/ became visible but before the newer
+      // meta.bin publish completed. Restart must stay bounded by the last trusted meta.
+      fs::copy_file(saved_root / "old_meta.bin", storage_root / "meta.bin",
+                    fs::copy_options::overwrite_existing, ec);
+      ASSERT_FALSE(ec) << ec.message();
+
+      const auto snapshot_config = BuildPersistenceSnapshotConfig(scoped_dir.path(), config.node_id);
+      auto restarted = std::make_shared<RaftNode>(config, snapshot_config);
+      const NodeStatusSnapshot status = restarted->GetStatusSnapshot();
+      const std::string description = restarted->Describe();
+      int voted_for = -1;
+      ASSERT_TRUE(ExtractIntField(description, "voted_for", &voted_for)) << description;
+
+      EXPECT_EQ(status.term, old_state.current_term) << description;
+      EXPECT_EQ(status.commit_index, old_state.commit_index) << description;
+      EXPECT_EQ(status.last_applied, old_state.last_applied) << description;
+      EXPECT_EQ(status.last_log_index, old_state.log.back().index) << description;
+      EXPECT_EQ(voted_for, old_state.voted_for) << description;
+
+      std::string actual;
+      EXPECT_TRUE(restarted->DebugGetValue("boundary_key_3", &actual));
+      EXPECT_EQ(actual, "boundary_value_3");
+      EXPECT_FALSE(restarted->DebugGetValue("boundary_key_5", &actual)) << description;
+    }
+
+    TEST(PersistenceTest, MetaFileSyncFailureNeedsExactFailureInjectionSeam)
+    {
+      ScopedDataDir scoped_dir("test_meta_file_sync_injection_contract");
+      NodeConfig config;
+      config.node_id = 1;
+      config.address = "127.0.0.1:" + std::to_string(RandomBasePort());
+      config.election_timeout_min = std::chrono::milliseconds(250);
+      config.election_timeout_max = std::chrono::milliseconds(400);
+      config.heartbeat_interval = std::chrono::milliseconds(80);
+      config.rpc_deadline = std::chrono::milliseconds(500);
+      config.data_dir = (scoped_dir.path() / "raft_data" / "node_1").string();
+
+      const fs::path storage_root = config.data_dir;
+      const fs::path injected_meta_tmp_path = storage_root / "meta.bin.tmp";
+      const std::string trusted_state_expectation =
+          "restart must keep the previously durable term/vote/commit_index/last_applied and must not expose newer hard state when meta file data was not durably synced";
+
+      auto storage = CreateFileRaftStorage(config.data_dir);
+      const auto old_state = MakePersistenceState(1, 3);
+      const auto new_state = MakePersistenceState(1, 5);
+      std::string error;
+
+      ASSERT_TRUE(storage->Save(old_state, &error)) << error;
+      {
+        ScopedEnvVar failpoint("RAFT_TEST_STORAGE_FAILPOINT", "meta_file_sync");
+        ASSERT_FALSE(storage->Save(new_state, &error));
+      }
+      ExpectInjectedFailure(error,
+                            "meta.bin file sync",
+                            injected_meta_tmp_path,
+                            trusted_state_expectation);
+
+      const auto snapshot_config = BuildPersistenceSnapshotConfig(scoped_dir.path(), config.node_id);
+      auto restarted = std::make_shared<RaftNode>(config, snapshot_config);
+      const NodeStatusSnapshot status = restarted->GetStatusSnapshot();
+      const std::string description = restarted->Describe();
+      int voted_for = -1;
+      ASSERT_TRUE(ExtractIntField(description, "voted_for", &voted_for)) << description;
+
+      EXPECT_EQ(status.term, old_state.current_term) << description;
+      EXPECT_EQ(status.commit_index, old_state.commit_index) << description;
+      EXPECT_EQ(status.last_applied, old_state.last_applied) << description;
+      EXPECT_EQ(status.last_log_index, old_state.log.back().index) << description;
+      EXPECT_EQ(voted_for, old_state.voted_for) << description;
+
+      std::string actual;
+      EXPECT_TRUE(restarted->DebugGetValue("boundary_key_3", &actual));
+      EXPECT_EQ(actual, "boundary_value_3");
+      EXPECT_FALSE(restarted->DebugGetValue("boundary_key_5", &actual)) << description;
+    }
+
+    TEST(PersistenceTest, MetaDirectorySyncFailureNeedsExactFailureInjectionSeam)
+    {
+      ScopedDataDir scoped_dir("test_meta_directory_sync_injection_contract");
+      NodeConfig config;
+      config.node_id = 1;
+      config.address = "127.0.0.1:" + std::to_string(RandomBasePort());
+      config.election_timeout_min = std::chrono::milliseconds(250);
+      config.election_timeout_max = std::chrono::milliseconds(400);
+      config.heartbeat_interval = std::chrono::milliseconds(80);
+      config.rpc_deadline = std::chrono::milliseconds(500);
+      config.data_dir = (scoped_dir.path() / "raft_data" / "node_1").string();
+
+      const fs::path storage_root = config.data_dir;
+      const fs::path saved_root = scoped_dir.path() / "saved_publish_states";
+      const fs::path meta_path = storage_root / "meta.bin";
+      const std::string trusted_state_expectation =
+          "restart must stay on the previously trusted hard-state boundary if the new meta publish reached rename/replace but the parent directory sync did not complete";
+
+      auto storage = CreateFileRaftStorage(config.data_dir);
+      const auto old_state = MakePersistenceState(1, 3);
+      const auto new_state = MakePersistenceState(1, 5);
+      std::string error;
+
+      ASSERT_TRUE(storage->Save(old_state, &error)) << error;
+
+      std::error_code ec;
+      fs::create_directories(saved_root, ec);
+      ASSERT_FALSE(ec) << ec.message();
+      fs::copy_file(meta_path, saved_root / "old_meta.bin",
+                    fs::copy_options::overwrite_existing, ec);
+      ASSERT_FALSE(ec) << ec.message();
+
+      {
+        ScopedEnvVar failpoint("RAFT_TEST_STORAGE_FAILPOINT", "meta_directory_sync");
+        ASSERT_FALSE(storage->Save(new_state, &error));
+      }
+      ExpectInjectedFailure(error,
+                            "meta.bin parent directory sync after replace",
+                            storage_root,
+                            trusted_state_expectation);
+
+      // Simulate restart after an untrusted meta publish by restoring the last
+      // known durable meta boundary while keeping the newer log tree visible.
+      fs::copy_file(saved_root / "old_meta.bin", meta_path,
+                    fs::copy_options::overwrite_existing, ec);
+      ASSERT_FALSE(ec) << ec.message();
+
+      const auto snapshot_config = BuildPersistenceSnapshotConfig(scoped_dir.path(), config.node_id);
+      auto restarted = std::make_shared<RaftNode>(config, snapshot_config);
+      const NodeStatusSnapshot status = restarted->GetStatusSnapshot();
+      const std::string description = restarted->Describe();
+      int voted_for = -1;
+      ASSERT_TRUE(ExtractIntField(description, "voted_for", &voted_for)) << description;
+
+      EXPECT_EQ(status.term, old_state.current_term) << description;
+      EXPECT_EQ(status.commit_index, old_state.commit_index) << description;
+      EXPECT_EQ(status.last_applied, old_state.last_applied) << description;
+      EXPECT_EQ(status.last_log_index, old_state.log.back().index) << description;
+      EXPECT_EQ(voted_for, old_state.voted_for) << description;
+
+      std::string actual;
+      EXPECT_TRUE(restarted->DebugGetValue("boundary_key_3", &actual));
+      EXPECT_EQ(actual, "boundary_value_3");
+      EXPECT_FALSE(restarted->DebugGetValue("boundary_key_5", &actual)) << description;
     }
 
   } // namespace
