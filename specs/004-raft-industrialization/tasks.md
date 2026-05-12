@@ -135,7 +135,7 @@
   Basis: `specs/003-persistence-reliability/progress.md` Blocked T613-T616；`plan.md` W2/W3。
   Tests To Run: `./test.sh --group snapshot-storage`; `./test.sh --group snapshot-recovery`.
 
-- [ ] T008 [P] [US1] Migrate useful manual recovery scenarios from `tests/persistence_more_test.cpp` into managed GTest files
+- [x] T008 [P] [US1] Migrate useful manual recovery scenarios from `tests/persistence_more_test.cpp` into managed GTest files
   Goal: 把对工业化有价值的两阶段恢复场景纳入受管回归，而不是停留在手工诊断程序里。
   Input: `tests/persistence_more_test.cpp`, `tests/persistence_test.cpp`, `tests/test_raft_snapshot_diagnosis.cpp`, `tests/CMakeLists.txt`.
   Scope: 优先把有用场景迁入现有 GTest；若保留手工程序，则在 `tests/README.md` 或 spec docs 中明确其非回归角色。

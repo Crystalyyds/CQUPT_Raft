@@ -136,6 +136,11 @@ For these areas, Windows/macOS follow-up must either:
 - Snapshot staged atomic publish hardening from `003`
 - Restart recovery diagnostic strengthening from `003`
 - Constructed crash-artifact recovery coverage already added in `003`
+- Former manual two-phase recovery scenarios from `tests/persistence_more_test.cpp`
+  are now covered by managed CTest via
+  `RaftSnapshotDiagnosisTest.RestartedSingleNodeLoadsSnapshotAndTailLogsWithoutPeers`
+  and
+  `RaftSnapshotDiagnosisTest.CompactedClusterReplicatesNewLogAfterRestartedLeaderStepsDown`
 
 ### Enters Follow-Up Hardening
 
@@ -154,5 +159,10 @@ For these areas, Windows/macOS follow-up must either:
   Carry-forward completion status therefore uses
   `specs/003-persistence-reliability/progress.md` as the authoritative phase
   baseline.
+- `tests/persistence_more_test.cpp` is retained as a manual-only /
+  diagnostic-only helper for two-phase rerun demos, marker files, and exported
+  text snapshots/manifests. It is not part of CTest because it depends on
+  re-running the same executable across phases and human inspection of retained
+  artifacts.
 - This document does not authorize any production-code rewrite. It only freezes
   scope and validation expectations for the remaining industrialization work.
