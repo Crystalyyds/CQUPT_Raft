@@ -202,7 +202,7 @@
   Basis: `plan.md` W3；`spec.md` FR-003/FR-010；`specs/003-persistence-reliability/progress.md` Notes about trusted-state rules。
   Tests To Run: `./test.sh --group persistence`; `./test.sh --group segment-basic`.
 
-- [ ] T013 [P] [US1] Add snapshot metadata and applied-state restart matrix tests in `tests/test_raft_snapshot_restart.cpp` and `tests/test_raft_snapshot_diagnosis.cpp`
+- [x] T013 [P] [US1] Add snapshot metadata and applied-state restart matrix tests in `tests/test_raft_snapshot_restart.cpp` and `tests/test_raft_snapshot_diagnosis.cpp`
   Goal: 补齐 invalid snapshot、all-invalid fallback、metadata mismatch、applied replay 的恢复覆盖。
   Input: `tests/test_raft_snapshot_restart.cpp`, `tests/test_raft_snapshot_diagnosis.cpp`, `data-model.md`, `validation-matrix.md`.
   Scope: 只改测试文件。

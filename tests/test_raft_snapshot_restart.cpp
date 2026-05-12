@@ -150,6 +150,20 @@ void CopyFile(const std::filesystem::path& from, const std::filesystem::path& to
                    << ", to=" << to.string() << ", error=" << ec.message();
 }
 
+void CopyDirectoryRecursively(const std::filesystem::path& from,
+                              const std::filesystem::path& to) {
+  std::error_code ec;
+  std::filesystem::create_directories(to.parent_path(), ec);
+  ASSERT_FALSE(ec) << ec.message();
+  std::filesystem::copy(from,
+                        to,
+                        std::filesystem::copy_options::recursive |
+                            std::filesystem::copy_options::overwrite_existing,
+                        ec);
+  ASSERT_FALSE(ec) << "copy snapshot directory failed: from=" << from.string()
+                   << ", to=" << to.string() << ", error=" << ec.message();
+}
+
 std::string JoinIssueReasons(const std::vector<SnapshotValidationIssue>& issues) {
   std::ostringstream oss;
   for (const auto& issue : issues) {
@@ -1227,6 +1241,152 @@ TEST_F(RaftSnapshotRecoveryTest, RestartAfterSnapshotPublishFailureNeedsExactFai
   EXPECT_LT(*restored_snapshot_index, injected_index)
       << "restart should reject the injected untrusted snapshot publish boundary, describe="
       << description;
+}
+
+TEST_F(RaftSnapshotRecoveryTest,
+       StandaloneRestartRejectsMetadataMismatchedVisibleSnapshotAndKeepsTrustedBoundary) {
+  constexpr std::uint64_t kSnapshotThreshold = 12;
+  const std::string case_name = "restart_snapshot_metadata_mismatch";
+  auto cluster = MakeCluster(case_name, true, kSnapshotThreshold);
+  cluster.Start();
+
+  auto stable_leader = WaitForStableLeader(cluster.Nodes(), std::chrono::seconds(8));
+  ASSERT_TRUE(stable_leader.has_value())
+      << "leader did not stabilize before metadata mismatch test, cluster="
+      << DescribeCluster(cluster.Nodes());
+
+  WriteManyValues(cluster.Nodes(), "metadata_mismatch", 30);
+
+  stable_leader = WaitForStableLeader(cluster.Nodes(), std::chrono::seconds(8));
+  ASSERT_TRUE(stable_leader.has_value())
+      << "leader did not stabilize after metadata mismatch writes, cluster="
+      << DescribeCluster(cluster.Nodes());
+  const std::size_t leader_index = stable_leader->leader_index;
+
+  ASSERT_TRUE(WaitForNodeFieldAtLeast(cluster.Nodes()[leader_index],
+                                      "last_snapshot_index",
+                                      24,
+                                      std::chrono::seconds(20)))
+      << "leader did not create enough snapshots before metadata mismatch test, describe="
+      << cluster.Nodes()[leader_index]->Describe();
+
+  cluster.StopAll();
+
+  const std::filesystem::path node_snapshot_root =
+      snapshot_root_ / case_name / ("node_" + std::to_string(leader_index + 1));
+  const auto snapshot_dirs = ListSnapshotDirs(node_snapshot_root);
+  ASSERT_GE(snapshot_dirs.size(), 2U) << "need at least two trusted snapshots under "
+                                      << node_snapshot_root.string();
+
+  const auto latest_snapshot_dir = snapshot_dirs.back();
+  const auto latest_snapshot_index = SnapshotIndexFromDir(latest_snapshot_dir);
+  ASSERT_TRUE(latest_snapshot_index.has_value()) << latest_snapshot_dir.string();
+
+  const std::uint64_t mismatched_visible_index = *latest_snapshot_index + kSnapshotThreshold;
+  const std::filesystem::path mismatched_visible_dir =
+      node_snapshot_root / ("snapshot_" + FormatSnapshotIndex(mismatched_visible_index));
+  CopyDirectoryRecursively(latest_snapshot_dir, mismatched_visible_dir);
+
+  auto storage = CreateFileSnapshotStorage(node_snapshot_root.string(), "snapshot");
+  SnapshotMeta loaded_snapshot;
+  bool has_snapshot = false;
+  std::string error;
+  ASSERT_TRUE(storage->LoadLatestValidSnapshot(&loaded_snapshot, &has_snapshot, &error)) << error;
+  ASSERT_TRUE(has_snapshot);
+  EXPECT_EQ(loaded_snapshot.last_included_index, *latest_snapshot_index)
+      << "metadata-mismatched visible snapshot directory must not replace the real trusted "
+         "snapshot boundary";
+
+  SnapshotListResult diagnostics;
+  ASSERT_TRUE(storage->ListSnapshotsWithDiagnostics(&diagnostics, &error)) << error;
+  bool saw_mismatched_dir_issue = false;
+  for (const auto& issue : diagnostics.validation_issues) {
+    if (issue.path.find(mismatched_visible_dir.string()) != std::string::npos) {
+      saw_mismatched_dir_issue = true;
+      break;
+    }
+  }
+  EXPECT_TRUE(saw_mismatched_dir_issue)
+      << "expected diagnostics for visible snapshot directory whose name does not match its "
+         "metadata index: "
+      << mismatched_visible_dir.string();
+
+  auto configs = BuildThreeNodeConfigs(data_root_ / case_name, base_port_);
+  auto snapshot_configs =
+      BuildThreeSnapshotConfigs(snapshot_root_ / case_name, true, kSnapshotThreshold);
+  auto restarted = std::make_shared<RaftNode>(configs[leader_index], snapshot_configs[leader_index]);
+
+  std::string actual;
+  ASSERT_TRUE(restarted->DebugGetValue("metadata_mismatch_29", &actual))
+      << "restart did not recover data after ignoring metadata-mismatched visible snapshot, "
+         "describe="
+      << restarted->Describe();
+  EXPECT_EQ(actual, "value_29");
+
+  const std::string description = restarted->Describe();
+  const auto restored_snapshot_index = ExtractUintField(description, "last_snapshot_index");
+  ASSERT_TRUE(restored_snapshot_index.has_value()) << description;
+  EXPECT_EQ(*restored_snapshot_index, *latest_snapshot_index)
+      << "restart should keep the real trusted snapshot boundary when a higher-index visible "
+         "snapshot directory has mismatched metadata, describe="
+      << description;
+  EXPECT_LT(*restored_snapshot_index, mismatched_visible_index) << description;
+}
+
+TEST_F(RaftSnapshotRecoveryTest, AllPublishedSnapshotsInvalidYieldNoTrustedSnapshot) {
+  constexpr std::uint64_t kSnapshotThreshold = 12;
+  const std::string case_name = "restart_all_invalid_snapshots";
+  auto cluster = MakeCluster(case_name, true, kSnapshotThreshold);
+  cluster.Start();
+
+  auto stable_leader = WaitForStableLeader(cluster.Nodes(), std::chrono::seconds(8));
+  ASSERT_TRUE(stable_leader.has_value())
+      << "leader did not stabilize before all-invalid snapshot test, cluster="
+      << DescribeCluster(cluster.Nodes());
+
+  WriteManyValues(cluster.Nodes(), "all_invalid_snapshot", 30);
+
+  stable_leader = WaitForStableLeader(cluster.Nodes(), std::chrono::seconds(8));
+  ASSERT_TRUE(stable_leader.has_value())
+      << "leader did not stabilize after all-invalid snapshot writes, cluster="
+      << DescribeCluster(cluster.Nodes());
+  const std::size_t leader_index = stable_leader->leader_index;
+
+  ASSERT_TRUE(WaitForNodeFieldAtLeast(cluster.Nodes()[leader_index],
+                                      "last_snapshot_index",
+                                      24,
+                                      std::chrono::seconds(20)))
+      << "leader did not create enough snapshots before all-invalid snapshot test, describe="
+      << cluster.Nodes()[leader_index]->Describe();
+
+  cluster.StopAll();
+
+  const std::filesystem::path node_snapshot_root =
+      snapshot_root_ / case_name / ("node_" + std::to_string(leader_index + 1));
+  const auto snapshot_dirs = ListSnapshotDirs(node_snapshot_root);
+  ASSERT_GE(snapshot_dirs.size(), 2U) << "need at least two trusted snapshots under "
+                                      << node_snapshot_root.string();
+
+  for (const auto& snapshot_dir : snapshot_dirs) {
+    WriteTextFile(snapshot_dir / "data.bin",
+                  "corrupted-all-invalid-" + snapshot_dir.filename().string());
+  }
+
+  auto storage = CreateFileSnapshotStorage(node_snapshot_root.string(), "snapshot");
+  SnapshotMeta loaded_snapshot;
+  bool has_snapshot = true;
+  std::string error;
+  ASSERT_TRUE(storage->LoadLatestValidSnapshot(&loaded_snapshot, &has_snapshot, &error)) << error;
+  EXPECT_FALSE(has_snapshot)
+      << "when every published snapshot is invalid, trusted snapshot selection must report that "
+         "no snapshot boundary is acceptable";
+
+  SnapshotListResult diagnostics;
+  ASSERT_TRUE(storage->ListSnapshotsWithDiagnostics(&diagnostics, &error)) << error;
+  EXPECT_TRUE(diagnostics.snapshots.empty())
+      << "all invalid snapshots must be excluded from the trusted snapshot list";
+  EXPECT_GE(diagnostics.validation_issues.size(), snapshot_dirs.size())
+      << "every invalid snapshot should contribute a validation issue";
 }
 
 }  // namespace
