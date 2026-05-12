@@ -176,7 +176,7 @@
   Basis: `research.md` Decision 3/6；`plan.md` W2；`specs/003-persistence-reliability/progress.md` Blocked T613-T616。
   Tests To Run: T007 的新增用例；`./test.sh --group snapshot-storage`; `./test.sh --group snapshot-recovery`.
 
-- [ ] T011 [US1] Add injected-failure diagnostics in `modules/raft/storage/raft_storage.cpp` and `modules/raft/storage/snapshot_storage.cpp`
+- [x] T011 [US1] Add injected-failure diagnostics in `modules/raft/storage/raft_storage.cpp` and `modules/raft/storage/snapshot_storage.cpp`
   Goal: 让 durability failure 的日志/诊断能指明操作、路径、平台范围和 trusted-state 预期。
   Input: `raft_storage.cpp`, `snapshot_storage.cpp`, `validation-matrix.md`, T009, T010.
   Scope: 仅改 storage 相关 `.cpp`。

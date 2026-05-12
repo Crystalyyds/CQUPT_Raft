@@ -334,13 +334,20 @@ namespace raftdemo
     void ExpectInjectedFailure(const std::string &error,
                                const std::string &operation,
                                const std::filesystem::path &path,
-                               const std::string &trusted_state_expectation)
+                               const std::string &failure_class,
+                               const std::string &trusted_state_expectation,
+                               const std::string &diagnostic_expectation)
     {
       EXPECT_NE(error.find("injected durability failure"), std::string::npos) << error;
       EXPECT_NE(error.find("operation=" + operation), std::string::npos) << error;
       EXPECT_NE(error.find("path=" + path.string()), std::string::npos) << error;
+      EXPECT_NE(error.find("failure_class=" + failure_class), std::string::npos) << error;
       EXPECT_NE(error.find("linux_specific=true"), std::string::npos) << error;
       EXPECT_NE(error.find("trusted_state_expectation=" + trusted_state_expectation), std::string::npos)
+          << error;
+      EXPECT_NE(error.find("recovery_expectation=" + trusted_state_expectation), std::string::npos)
+          << error;
+      EXPECT_NE(error.find("diagnostic_expectation=" + diagnostic_expectation), std::string::npos)
           << error;
     }
 
@@ -1068,7 +1075,9 @@ namespace raftdemo
       ExpectInjectedFailure(error,
                             "log directory replace",
                             storage_root / "log",
-                            trusted_state_expectation);
+                            "replace/rename",
+                            trusted_state_expectation,
+                            "error should identify that replacing log/ failed before the newer segment tree became the trusted published boundary");
 
       std::filesystem::remove_all(storage_root / "log", ec);
       ec.clear();
@@ -1114,7 +1123,9 @@ namespace raftdemo
       ExpectInjectedFailure(error,
                             "log parent directory sync after publish",
                             storage_root,
-                            trusted_state_expectation);
+                            "directory sync",
+                            trusted_state_expectation,
+                            "error should identify that the parent directory sync boundary failed after the newer log tree became visible");
 
       std::filesystem::remove_all(storage_root / "log", ec);
       ec.clear();
@@ -1150,7 +1161,9 @@ namespace raftdemo
       ExpectInjectedFailure(error,
                             "final segment partial write during save",
                             storage_root / "log.tmp" / "segment_00000000000000000513.log",
-                            trusted_state_expectation);
+                            "partial write",
+                            trusted_state_expectation,
+                            "error should identify that the final temp segment write stopped at a partial-record boundary and that recovery must reject the untrusted tail");
 
       PersistentRaftState loaded;
       bool has_state = false;

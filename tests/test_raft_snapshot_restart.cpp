@@ -1181,9 +1181,18 @@ TEST_F(RaftSnapshotRecoveryTest, RestartAfterSnapshotPublishFailureNeedsExactFai
             std::string::npos)
       << error;
   EXPECT_NE(error.find("path=" + injected_final_dir.string()), std::string::npos) << error;
+  EXPECT_NE(error.find("failure_class=directory sync"), std::string::npos) << error;
   EXPECT_NE(error.find("linux_specific=true"), std::string::npos) << error;
   EXPECT_NE(
       error.find("trusted_state_expectation=if restart sees a newer snapshot publish point without the required trusted publish completion, it must reject that snapshot and continue from the previous trusted snapshot plus replayable log tail"),
+      std::string::npos)
+      << error;
+  EXPECT_NE(
+      error.find("recovery_expectation=if restart sees a newer snapshot publish point without the required trusted publish completion, it must reject that snapshot and continue from the previous trusted snapshot plus replayable log tail"),
+      std::string::npos)
+      << error;
+  EXPECT_NE(
+      error.find("diagnostic_expectation=error should identify that the newer snapshot publish point became visible without a trusted parent directory sync boundary"),
       std::string::npos)
       << error;
 

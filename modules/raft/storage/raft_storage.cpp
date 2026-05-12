@@ -106,18 +106,24 @@ namespace raftdemo
 
     std::string BuildInjectedFailureMessage(const char *operation,
                                            const std::filesystem::path &path,
-                                           const char *trusted_state_expectation)
+                                           const char *failure_class,
+                                           const char *trusted_state_expectation,
+                                           const char *recovery_expectation,
+                                           const char *diagnostic_expectation)
     {
       std::ostringstream oss;
       oss << "injected durability failure"
           << ", operation=" << operation
           << ", path=" << path.string()
+          << ", failure_class=" << failure_class
 #if defined(__linux__)
           << ", linux_specific=true"
 #else
           << ", linux_specific=false"
 #endif
-          << ", trusted_state_expectation=" << trusted_state_expectation;
+          << ", trusted_state_expectation=" << trusted_state_expectation
+          << ", recovery_expectation=" << recovery_expectation
+          << ", diagnostic_expectation=" << diagnostic_expectation;
       return oss.str();
     }
 
@@ -125,6 +131,8 @@ namespace raftdemo
                                   const char *operation,
                                   const std::filesystem::path &path,
                                   const char *trusted_state_expectation,
+                                  const char *failure_class,
+                                  const char *diagnostic_expectation,
                                   std::string *error)
     {
       if (!IsStorageFailpointActive(failpoint))
@@ -134,7 +142,12 @@ namespace raftdemo
 
       if (error != nullptr)
       {
-        *error = BuildInjectedFailureMessage(operation, path, trusted_state_expectation);
+        *error = BuildInjectedFailureMessage(operation,
+                                            path,
+                                            failure_class,
+                                            trusted_state_expectation,
+                                            trusted_state_expectation,
+                                            diagnostic_expectation);
       }
       return true;
     }
@@ -397,6 +410,8 @@ namespace raftdemo
                                    "meta.bin parent directory sync after replace",
                                    parent_dir,
                                    "restart must stay on the previously trusted hard-state boundary if the new meta publish reached rename/replace but the parent directory sync did not complete",
+                                   "directory sync",
+                                   "error should identify that meta.bin reached rename/replace but the parent directory sync boundary did not complete",
                                    error))
       {
         return false;
@@ -635,7 +650,10 @@ namespace raftdemo
           *error = BuildInjectedFailureMessage(
               "final segment partial write during save",
               segment_path,
-              "save must fail before publishing the new log directory, so restart stays on the previously durable log boundary and ignores the partially written temp segment");
+              "partial write",
+              "save must fail before publishing the new log directory, so restart stays on the previously durable log boundary and ignores the partially written temp segment",
+              "save must fail before publishing the new log directory, so restart stays on the previously durable log boundary and ignores the partially written temp segment",
+              "error should identify that the final temp segment write stopped at a partial-record boundary and that recovery must reject the untrusted tail");
         }
         return false;
       }
@@ -685,6 +703,8 @@ namespace raftdemo
                                    "log directory replace",
                                    dst,
                                    "restart must keep the previously durable segment set and must not trust a partially published newer log boundary when replacing log/ fails",
+                                   "replace/rename",
+                                   "error should identify that replacing log/ failed before the newer segment tree became the trusted published boundary",
                                    error))
       {
         return false;
@@ -709,6 +729,8 @@ namespace raftdemo
                                    "log parent directory sync after publish",
                                    parent_dir,
                                    "restart must stay bounded by the last fully durable segment publish if the new log tree becomes visible but the parent directory sync does not complete",
+                                   "directory sync",
+                                   "error should identify that the parent directory sync boundary failed after the newer log tree became visible",
                                    error))
       {
         return false;
@@ -1049,6 +1071,8 @@ namespace raftdemo
                                    "meta.bin file sync",
                                    meta_path,
                                    "restart must keep the previously durable term/vote/commit_index/last_applied and must not expose newer hard state when meta file data was not durably synced",
+                                   "file sync",
+                                   "error should identify that the meta temp file sync boundary failed before the new hard-state publish became durable",
                                    error))
       {
         return false;

@@ -77,7 +77,10 @@ namespace raftdemo
 
     bool BuildInjectedSnapshotFailure(const std::string &operation,
                                       const std::filesystem::path &path,
+                                      const std::string &failure_class,
                                       const std::string &trusted_state_expectation,
+                                      const std::string &recovery_expectation,
+                                      const std::string &diagnostic_expectation,
                                       const std::string &detail,
                                       std::string *error)
     {
@@ -87,8 +90,15 @@ namespace raftdemo
         oss << "snapshot storage failure injection triggered"
             << ", operation=" << operation
             << ", path=" << path.string()
+            << ", failure_class=" << failure_class
+#if defined(__linux__)
             << ", linux_specific=true"
-            << ", trusted_state_expectation=" << trusted_state_expectation;
+#else
+            << ", linux_specific=false"
+#endif
+            << ", trusted_state_expectation=" << trusted_state_expectation
+            << ", recovery_expectation=" << recovery_expectation
+            << ", diagnostic_expectation=" << diagnostic_expectation;
         if (!detail.empty())
         {
           oss << ", detail=" << detail;
@@ -701,7 +711,10 @@ namespace raftdemo
       return BuildInjectedSnapshotFailure(
           "snapshot staged publish after data/meta write",
           final_dir,
+          "replace/rename",
           "if staged snapshot publish fails before the final trusted publish point, restart must keep using the previously trusted snapshot and ignore the incomplete newer snapshot",
+          "restart should keep using the last trusted snapshot and reject the incomplete newer snapshot publish attempt",
+          "error should identify that the staged snapshot directory was never promoted to the trusted published snapshot boundary",
           "staging snapshot directory left in place for deterministic recovery fallback validation",
           error);
     }
@@ -771,7 +784,12 @@ namespace raftdemo
               : "if restart sees a newer snapshot publish point without the required trusted publish completion, it must reject that snapshot and continue from the previous trusted snapshot plus replayable log tail";
       return BuildInjectedSnapshotFailure(operation,
                                           failure_path,
+                                          "directory sync",
                                           trusted_state_expectation,
+                                          trusted_state_expectation,
+                                          failpoint == SnapshotStorageFailPoint::kParentDirectorySyncAfterPublish
+                                              ? "error should identify that the snapshot directory became visible but the parent directory sync boundary did not complete"
+                                              : "error should identify that the newer snapshot publish point became visible without a trusted parent directory sync boundary",
                                           detail,
                                           error);
     }
@@ -962,7 +980,10 @@ namespace raftdemo
           return BuildInjectedSnapshotFailure(
               "snapshot prune remove old directory",
               snapshots[i].snapshot_dir,
+              "prune/remove",
               "if pruning old snapshots fails during remove/publish cleanup, the newest trusted snapshot must remain loadable and restart must not mis-classify prune leftovers as the chosen trusted snapshot",
+              "restart should keep the newest trusted snapshot loadable and should not let prune leftovers win trusted snapshot selection",
+              "error should identify that pruning the old snapshot directory failed before cleanup completed",
               "old snapshot directory removal was rejected before mutating trusted snapshot selection",
               error);
         }

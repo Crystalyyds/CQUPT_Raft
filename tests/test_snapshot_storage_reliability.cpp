@@ -363,9 +363,18 @@ TEST_F(SnapshotStorageReliabilityTest, StagedSnapshotPublishFailureNeedsExactFai
   EXPECT_NE(error.find("operation=snapshot staged publish after data/meta write"), std::string::npos)
       << error;
   EXPECT_NE(error.find("path=" + snapshot_publish_root.string()), std::string::npos) << error;
+  EXPECT_NE(error.find("failure_class=replace/rename"), std::string::npos) << error;
   EXPECT_NE(error.find("linux_specific=true"), std::string::npos) << error;
   EXPECT_NE(
       error.find("trusted_state_expectation=if staged snapshot publish fails before the final trusted publish point, restart must keep using the previously trusted snapshot and ignore the incomplete newer snapshot"),
+      std::string::npos)
+      << error;
+  EXPECT_NE(
+      error.find("recovery_expectation=restart should keep using the last trusted snapshot and reject the incomplete newer snapshot publish attempt"),
+      std::string::npos)
+      << error;
+  EXPECT_NE(
+      error.find("diagnostic_expectation=error should identify that the staged snapshot directory was never promoted to the trusted published snapshot boundary"),
       std::string::npos)
       << error;
 
@@ -401,9 +410,18 @@ TEST_F(SnapshotStorageReliabilityTest, SnapshotDirectorySyncFailureNeedsExactFai
   EXPECT_NE(error.find("operation=snapshot parent directory sync after publish"), std::string::npos)
       << error;
   EXPECT_NE(error.find("path=" + snapshot_dir_.string()), std::string::npos) << error;
+  EXPECT_NE(error.find("failure_class=directory sync"), std::string::npos) << error;
   EXPECT_NE(error.find("linux_specific=true"), std::string::npos) << error;
   EXPECT_NE(
       error.find("trusted_state_expectation=if the new snapshot directory becomes visible but the parent directory sync does not complete, restart must stay on the last fully durable trusted snapshot boundary"),
+      std::string::npos)
+      << error;
+  EXPECT_NE(
+      error.find("recovery_expectation=if the new snapshot directory becomes visible but the parent directory sync does not complete, restart must stay on the last fully durable trusted snapshot boundary"),
+      std::string::npos)
+      << error;
+  EXPECT_NE(
+      error.find("diagnostic_expectation=error should identify that the snapshot directory became visible but the parent directory sync boundary did not complete"),
       std::string::npos)
       << error;
 
@@ -436,13 +454,22 @@ TEST_F(SnapshotStorageReliabilityTest, SnapshotPruneRemoveFailureNeedsExactFailu
   {
     ScopedEnvVar failpoint(kSnapshotStorageFailpointEnv,
                            "snapshot_prune_remove_old_directory");
-    EXPECT_FALSE(storage_->PruneSnapshots(2, &error));
+  EXPECT_FALSE(storage_->PruneSnapshots(2, &error));
   }
   EXPECT_NE(error.find("operation=snapshot prune remove old directory"), std::string::npos) << error;
   EXPECT_NE(error.find("path=" + old_snapshot_dir.string()), std::string::npos) << error;
+  EXPECT_NE(error.find("failure_class=prune/remove"), std::string::npos) << error;
   EXPECT_NE(error.find("linux_specific=true"), std::string::npos) << error;
   EXPECT_NE(
       error.find("trusted_state_expectation=if pruning old snapshots fails during remove/publish cleanup, the newest trusted snapshot must remain loadable and restart must not mis-classify prune leftovers as the chosen trusted snapshot"),
+      std::string::npos)
+      << error;
+  EXPECT_NE(
+      error.find("recovery_expectation=restart should keep the newest trusted snapshot loadable and should not let prune leftovers win trusted snapshot selection"),
+      std::string::npos)
+      << error;
+  EXPECT_NE(
+      error.find("diagnostic_expectation=error should identify that pruning the old snapshot directory failed before cleanup completed"),
       std::string::npos)
       << error;
 

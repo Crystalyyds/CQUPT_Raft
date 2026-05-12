@@ -296,13 +296,20 @@ namespace raftdemo
     void ExpectInjectedFailure(const std::string &error,
                                const std::string &operation,
                                const fs::path &path,
-                               const std::string &trusted_state_expectation)
+                               const std::string &failure_class,
+                               const std::string &trusted_state_expectation,
+                               const std::string &diagnostic_expectation)
     {
       EXPECT_NE(error.find("injected durability failure"), std::string::npos) << error;
       EXPECT_NE(error.find("operation=" + operation), std::string::npos) << error;
       EXPECT_NE(error.find("path=" + path.string()), std::string::npos) << error;
+      EXPECT_NE(error.find("failure_class=" + failure_class), std::string::npos) << error;
       EXPECT_NE(error.find("linux_specific=true"), std::string::npos) << error;
       EXPECT_NE(error.find("trusted_state_expectation=" + trusted_state_expectation), std::string::npos)
+          << error;
+      EXPECT_NE(error.find("recovery_expectation=" + trusted_state_expectation), std::string::npos)
+          << error;
+      EXPECT_NE(error.find("diagnostic_expectation=" + diagnostic_expectation), std::string::npos)
           << error;
     }
 
@@ -748,7 +755,9 @@ namespace raftdemo
       ExpectInjectedFailure(error,
                             "meta.bin file sync",
                             injected_meta_tmp_path,
-                            trusted_state_expectation);
+                            "file sync",
+                            trusted_state_expectation,
+                            "error should identify that the meta temp file sync boundary failed before the new hard-state publish became durable");
 
       const auto snapshot_config = BuildPersistenceSnapshotConfig(scoped_dir.path(), config.node_id);
       auto restarted = std::make_shared<RaftNode>(config, snapshot_config);
@@ -808,7 +817,9 @@ namespace raftdemo
       ExpectInjectedFailure(error,
                             "meta.bin parent directory sync after replace",
                             storage_root,
-                            trusted_state_expectation);
+                            "directory sync",
+                            trusted_state_expectation,
+                            "error should identify that meta.bin reached rename/replace but the parent directory sync boundary did not complete");
 
       // Simulate restart after an untrusted meta publish by restoring the last
       // known durable meta boundary while keeping the newer log tree visible.
