@@ -189,7 +189,7 @@
   Basis: `research.md` Decision 7；`plan.md` W2/W7。
   Tests To Run: `./test.sh --group persistence --keep-data`; `./test.sh --group diagnosis`.
 
-- [ ] T012 [US1] Add hard-state and log-boundary restart matrix tests in `tests/persistence_test.cpp` and `tests/test_raft_segment_storage.cpp`
+- [x] T012 [US1] Add hard-state and log-boundary restart matrix tests in `tests/persistence_test.cpp` and `tests/test_raft_segment_storage.cpp`
   Goal: 系统化补齐 `current_term`、`voted_for`、`commit_index`、`last_applied` 与 log boundary 的重启恢复组合。
   Input: `tests/persistence_test.cpp`, `tests/test_raft_segment_storage.cpp`, `data-model.md`, `validation-matrix.md`.
   Scope: 只改测试文件。
@@ -215,7 +215,7 @@
   Basis: `plan.md` W3/W5；`spec.md` FR-003；`specs/003-persistence-reliability/progress.md` Phase 5/6 notes。
   Tests To Run: `./test.sh --group snapshot-recovery`; `./test.sh --group diagnosis`.
 
-- [ ] T014 [US1] Apply minimal recovery fixes in `modules/raft/storage/raft_storage.cpp`, `modules/raft/storage/snapshot_storage.cpp`, or `modules/raft/node/raft_node.cpp` if T012-T013 expose real defects
+- [x] T014 [US1] Apply minimal recovery fixes in `modules/raft/storage/raft_storage.cpp`, `modules/raft/storage/snapshot_storage.cpp`, or `modules/raft/node/raft_node.cpp` if T012-T013 expose real defects
   Goal: 仅在测试证明存在真实 trusted-state/restart 缺陷时做最小修复，不改格式、不改协议、不扩展公共 API。
   Input: T012/T013 failing evidence, affected `.cpp` files, `plan.md`, constitution.
   Scope: 限定在相关 `.cpp`；若触及 `raft_node.cpp`，必须同时检查相关 storage/state_machine tests。

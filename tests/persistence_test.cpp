@@ -243,6 +243,31 @@ namespace raftdemo
       return state;
     }
 
+    PersistentRaftState MakePersistenceStateWithHardState(std::uint64_t first_index,
+                                                          std::uint64_t last_index,
+                                                          std::uint64_t current_term,
+                                                          std::int64_t voted_for,
+                                                          std::uint64_t commit_index,
+                                                          std::uint64_t last_applied)
+    {
+      PersistentRaftState state;
+      state.current_term = current_term;
+      state.voted_for = voted_for;
+      state.commit_index = commit_index;
+      state.last_applied = last_applied;
+
+      for (std::uint64_t index = first_index; index <= last_index; ++index)
+      {
+        Command command;
+        command.type = CommandType::kSet;
+        command.key = "boundary_key_" + std::to_string(index);
+        command.value = "boundary_value_" + std::to_string(index);
+        state.log.push_back(LogRecord{index, current_term, command.Serialize()});
+      }
+
+      return state;
+    }
+
     void SetEnvVar(const char *name, const char *value)
     {
 #if defined(_WIN32)
@@ -723,6 +748,210 @@ namespace raftdemo
       EXPECT_TRUE(restarted->DebugGetValue("boundary_key_3", &actual));
       EXPECT_EQ(actual, "boundary_value_3");
       EXPECT_FALSE(restarted->DebugGetValue("boundary_key_5", &actual)) << description;
+    }
+
+    TEST(PersistenceTest, ColdRestartClampsCommitIndexToLastLogAndReplaysCommittedPrefix)
+    {
+      ScopedDataDir scoped_dir("test_recovery_commit_missing_log");
+
+      NodeConfig config;
+      config.node_id = 1;
+      config.address = "127.0.0.1:" + std::to_string(RandomBasePort());
+      config.election_timeout_min = std::chrono::milliseconds(250);
+      config.election_timeout_max = std::chrono::milliseconds(400);
+      config.heartbeat_interval = std::chrono::milliseconds(80);
+      config.rpc_deadline = std::chrono::milliseconds(500);
+      config.data_dir = (scoped_dir.path() / "raft_data" / "node_1").string();
+
+      const auto persisted = MakePersistenceStateWithHardState(1, 3, 4, 2, 99, 1);
+      std::string error;
+      auto storage = CreateFileRaftStorage(config.data_dir);
+      ASSERT_TRUE(storage->Save(persisted, &error)) << error;
+
+      const auto snapshot_config = BuildPersistenceSnapshotConfig(scoped_dir.path(), config.node_id);
+      auto restarted = std::make_shared<RaftNode>(config, snapshot_config);
+      const NodeStatusSnapshot status = restarted->GetStatusSnapshot();
+      const std::string description = restarted->Describe();
+      int voted_for = -1;
+      ASSERT_TRUE(ExtractIntField(description, "voted_for", &voted_for)) << description;
+
+      EXPECT_EQ(status.term, 4U) << description;
+      EXPECT_EQ(status.commit_index, 3U) << description;
+      EXPECT_EQ(status.last_applied, 3U) << description;
+      EXPECT_EQ(status.last_log_index, 3U) << description;
+      EXPECT_EQ(voted_for, 2) << description;
+
+      std::string actual;
+      EXPECT_TRUE(restarted->DebugGetValue("boundary_key_3", &actual)) << description;
+      EXPECT_EQ(actual, "boundary_value_3");
+    }
+
+    TEST(PersistenceTest, ColdRestartClampsLastAppliedToCommitIndexWhenAppliedExceedsCommit)
+    {
+      ScopedDataDir scoped_dir("test_recovery_last_applied_gt_commit");
+
+      NodeConfig config;
+      config.node_id = 1;
+      config.address = "127.0.0.1:" + std::to_string(RandomBasePort());
+      config.election_timeout_min = std::chrono::milliseconds(250);
+      config.election_timeout_max = std::chrono::milliseconds(400);
+      config.heartbeat_interval = std::chrono::milliseconds(80);
+      config.rpc_deadline = std::chrono::milliseconds(500);
+      config.data_dir = (scoped_dir.path() / "raft_data" / "node_1").string();
+
+      const auto persisted = MakePersistenceStateWithHardState(1, 3, 4, 2, 2, 3);
+      std::string error;
+      auto storage = CreateFileRaftStorage(config.data_dir);
+      ASSERT_TRUE(storage->Save(persisted, &error)) << error;
+
+      const auto snapshot_config = BuildPersistenceSnapshotConfig(scoped_dir.path(), config.node_id);
+      auto restarted = std::make_shared<RaftNode>(config, snapshot_config);
+      const NodeStatusSnapshot status = restarted->GetStatusSnapshot();
+      const std::string description = restarted->Describe();
+
+      EXPECT_EQ(status.term, 4U) << description;
+      EXPECT_EQ(status.commit_index, 2U) << description;
+      EXPECT_EQ(status.last_applied, 2U) << description;
+      EXPECT_EQ(status.last_log_index, 3U) << description;
+
+      std::string actual;
+      EXPECT_TRUE(restarted->DebugGetValue("boundary_key_2", &actual)) << description;
+      EXPECT_EQ(actual, "boundary_value_2");
+      EXPECT_FALSE(restarted->DebugGetValue("boundary_key_3", &actual)) << description;
+    }
+
+    TEST(PersistenceTest, ColdRestartClampsLastAppliedToTrustedLogPrefixWhenAppliedPointsPastAvailableLog)
+    {
+      ScopedDataDir scoped_dir("test_recovery_last_applied_missing_log");
+
+      NodeConfig config;
+      config.node_id = 1;
+      config.address = "127.0.0.1:" + std::to_string(RandomBasePort());
+      config.election_timeout_min = std::chrono::milliseconds(250);
+      config.election_timeout_max = std::chrono::milliseconds(400);
+      config.heartbeat_interval = std::chrono::milliseconds(80);
+      config.rpc_deadline = std::chrono::milliseconds(500);
+      config.data_dir = (scoped_dir.path() / "raft_data" / "node_1").string();
+
+      const auto persisted = MakePersistenceStateWithHardState(1, 3, 4, 2, 3, 99);
+      std::string error;
+      auto storage = CreateFileRaftStorage(config.data_dir);
+      ASSERT_TRUE(storage->Save(persisted, &error)) << error;
+
+      const auto snapshot_config = BuildPersistenceSnapshotConfig(scoped_dir.path(), config.node_id);
+      auto restarted = std::make_shared<RaftNode>(config, snapshot_config);
+      const NodeStatusSnapshot status = restarted->GetStatusSnapshot();
+      const std::string description = restarted->Describe();
+
+      EXPECT_EQ(status.term, 4U) << description;
+      EXPECT_EQ(status.commit_index, 3U) << description;
+      EXPECT_EQ(status.last_applied, 3U) << description;
+      EXPECT_EQ(status.last_log_index, 3U) << description;
+
+      std::string actual;
+      EXPECT_TRUE(restarted->DebugGetValue("boundary_key_3", &actual)) << description;
+      EXPECT_EQ(actual, "boundary_value_3");
+    }
+
+    TEST(PersistenceTest, ColdRestartUsesOlderMetaTermAndVoteWhenNewerLogTreeIsVisible)
+    {
+      ScopedDataDir scoped_dir("test_restart_old_meta_new_log_term_vote_boundary");
+
+      NodeConfig config;
+      config.node_id = 1;
+      config.address = "127.0.0.1:" + std::to_string(RandomBasePort());
+      config.election_timeout_min = std::chrono::milliseconds(250);
+      config.election_timeout_max = std::chrono::milliseconds(400);
+      config.heartbeat_interval = std::chrono::milliseconds(80);
+      config.rpc_deadline = std::chrono::milliseconds(500);
+      config.data_dir = (scoped_dir.path() / "raft_data" / "node_1").string();
+
+      const fs::path storage_root = config.data_dir;
+      const fs::path saved_root = scoped_dir.path() / "saved_publish_states";
+      auto storage = CreateFileRaftStorage(config.data_dir);
+      const auto old_state = MakePersistenceStateWithHardState(1, 3, 5, 1, 3, 3);
+      const auto new_state = MakePersistenceStateWithHardState(1, 5, 9, 3, 5, 5);
+      std::string error;
+
+      ASSERT_TRUE(storage->Save(old_state, &error)) << error;
+
+      std::error_code ec;
+      fs::create_directories(saved_root, ec);
+      ASSERT_FALSE(ec) << ec.message();
+      fs::copy_file(storage_root / "meta.bin", saved_root / "old_meta.bin",
+                    fs::copy_options::overwrite_existing, ec);
+      ASSERT_FALSE(ec) << ec.message();
+
+      ASSERT_TRUE(storage->Save(new_state, &error)) << error;
+      fs::copy_file(saved_root / "old_meta.bin", storage_root / "meta.bin",
+                    fs::copy_options::overwrite_existing, ec);
+      ASSERT_FALSE(ec) << ec.message();
+
+      const auto snapshot_config = BuildPersistenceSnapshotConfig(scoped_dir.path(), config.node_id);
+      auto restarted = std::make_shared<RaftNode>(config, snapshot_config);
+      const NodeStatusSnapshot status = restarted->GetStatusSnapshot();
+      const std::string description = restarted->Describe();
+      int voted_for = -1;
+      ASSERT_TRUE(ExtractIntField(description, "voted_for", &voted_for)) << description;
+
+      EXPECT_EQ(status.term, old_state.current_term) << description;
+      EXPECT_EQ(status.commit_index, old_state.commit_index) << description;
+      EXPECT_EQ(status.last_applied, old_state.last_applied) << description;
+      EXPECT_EQ(status.last_log_index, old_state.log.back().index) << description;
+      EXPECT_EQ(voted_for, old_state.voted_for) << description;
+
+      std::string actual;
+      EXPECT_TRUE(restarted->DebugGetValue("boundary_key_3", &actual)) << description;
+      EXPECT_EQ(actual, "boundary_value_3");
+      EXPECT_FALSE(restarted->DebugGetValue("boundary_key_5", &actual)) << description;
+    }
+
+    TEST(PersistenceTest, NewMetaWithOldLogBoundaryRejectsUntrustedCurrentTermAndVote)
+    {
+      ScopedDataDir scoped_dir("test_restart_new_meta_old_log_term_vote_boundary");
+
+      NodeConfig config;
+      config.node_id = 1;
+      config.address = "127.0.0.1:" + std::to_string(RandomBasePort());
+      config.election_timeout_min = std::chrono::milliseconds(250);
+      config.election_timeout_max = std::chrono::milliseconds(400);
+      config.heartbeat_interval = std::chrono::milliseconds(80);
+      config.rpc_deadline = std::chrono::milliseconds(500);
+      config.data_dir = (scoped_dir.path() / "raft_data" / "node_1").string();
+
+      const fs::path storage_root = config.data_dir;
+      const fs::path saved_root = scoped_dir.path() / "saved_publish_states";
+      auto storage = CreateFileRaftStorage(config.data_dir);
+      const auto old_state = MakePersistenceStateWithHardState(1, 3, 5, 1, 3, 3);
+      const auto new_state = MakePersistenceStateWithHardState(1, 5, 9, 3, 5, 5);
+      std::string error;
+
+      ASSERT_TRUE(storage->Save(old_state, &error)) << error;
+
+      std::error_code ec;
+      fs::create_directories(saved_root, ec);
+      ASSERT_FALSE(ec) << ec.message();
+      fs::copy(storage_root / "log", saved_root / "old_log",
+               fs::copy_options::recursive |
+                   fs::copy_options::overwrite_existing,
+               ec);
+      ASSERT_FALSE(ec) << ec.message();
+
+      ASSERT_TRUE(storage->Save(new_state, &error)) << error;
+
+      fs::remove_all(storage_root / "log", ec);
+      ASSERT_FALSE(ec) << ec.message();
+      fs::copy(saved_root / "old_log", storage_root / "log",
+               fs::copy_options::recursive |
+                   fs::copy_options::overwrite_existing,
+               ec);
+      ASSERT_FALSE(ec) << ec.message();
+
+      PersistentRaftState rejected;
+      bool has_state = false;
+      ASSERT_FALSE(storage->Load(&rejected, &has_state, &error));
+      EXPECT_FALSE(has_state);
+      EXPECT_NE(error.find("log count mismatch"), std::string::npos) << error;
     }
 
     TEST(PersistenceTest, MetaFileSyncFailureNeedsExactFailureInjectionSeam)

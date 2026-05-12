@@ -152,6 +152,30 @@ namespace raftdemo
       return true;
     }
 
+    void ClampRecoveredHardState(PersistentRaftState *state)
+    {
+      if (state == nullptr)
+      {
+        return;
+      }
+
+      const std::uint64_t recovered_last_log_index =
+          state->log.empty() ? 0 : state->log.back().index;
+
+      if (state->commit_index > recovered_last_log_index)
+      {
+        state->commit_index = recovered_last_log_index;
+      }
+      if (state->last_applied > recovered_last_log_index)
+      {
+        state->last_applied = recovered_last_log_index;
+      }
+      if (state->last_applied > state->commit_index)
+      {
+        state->last_applied = state->commit_index;
+      }
+    }
+
     struct SegmentEntryHeader
     {
       std::uint32_t magic{0};
@@ -918,6 +942,7 @@ namespace raftdemo
         }
 
         state->log = std::move(loaded);
+        ClampRecoveredHardState(state);
         *has_state = true;
         return true;
       }
@@ -1165,7 +1190,21 @@ namespace raftdemo
 
         if (records->size() != expected_count)
         {
-          if (error != nullptr)
+          bool removed_later_segment = false;
+          for (const auto &diagnostic : recovery_diagnostics)
+          {
+            if (diagnostic.rfind("removed_later_segment=", 0) == 0)
+            {
+              removed_later_segment = true;
+              break;
+            }
+          }
+          const bool accepted_truncated_prefix =
+              tail_truncated &&
+              !removed_later_segment &&
+              ((records->empty() && first_log_index == 0) ||
+               (!records->empty() && records->front().index == first_log_index));
+          if (!accepted_truncated_prefix && error != nullptr)
           {
             std::ostringstream oss;
             oss << "log count mismatch, log_dir=" << log_dir.string()
@@ -1185,16 +1224,20 @@ namespace raftdemo
             }
             *error = oss.str();
           }
-          return false;
+          if (!accepted_truncated_prefix)
+          {
+            return false;
+          }
         }
         if (!records->empty())
         {
-          if (records->front().index != first_log_index || records->back().index != last_log_index)
+          if (records->front().index != first_log_index ||
+              (!tail_truncated && records->back().index != last_log_index))
           {
             if (error != nullptr)
             {
               std::ostringstream oss;
-              oss << "log boundary mismatch while loading segments, log_dir=" << log_dir.string()
+                oss << "log boundary mismatch while loading segments, log_dir=" << log_dir.string()
                   << ", expected_first=" << first_log_index
                   << ", expected_last=" << last_log_index
                   << ", actual_first=" << records->front().index
@@ -1541,6 +1584,7 @@ namespace raftdemo
           state->log.push_back(std::move(record));
         }
 
+        ClampRecoveredHardState(state);
         *has_state = true;
         return true;
       }

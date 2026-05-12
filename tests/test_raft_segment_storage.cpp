@@ -1046,6 +1046,58 @@ namespace raftdemo
       EXPECT_NE(error.find("log count mismatch"), std::string::npos) << error;
     }
 
+    TEST_F(RaftSegmentStorageTest, MissingFirstSegmentFailsBeforeTrustingPublishedBoundary)
+    {
+      const auto storage_root = data_root_ / "direct_storage_missing_first_segment_boundary";
+      auto storage = CreateFileRaftStorage(storage_root.string());
+      const auto state = MakeState(1, 700);
+      std::string error;
+
+      ASSERT_TRUE(storage->Save(state, &error)) << error;
+
+      const auto segment_files = ListFilesWithExtension(storage_root / "log", ".log");
+      ASSERT_GE(segment_files.size(), 2U) << DescribeDirectoryTree(root_);
+      ASSERT_TRUE(std::filesystem::remove(segment_files.front())) << DescribeDirectoryTree(root_);
+
+      PersistentRaftState loaded;
+      bool has_state = true;
+      ASSERT_FALSE(storage->Load(&loaded, &has_state, &error));
+      EXPECT_FALSE(has_state);
+      EXPECT_FALSE(error.empty());
+    }
+
+    TEST_F(RaftSegmentStorageTest, FinalSegmentTailTruncateKeepsTrustedLogPrefixAndClampsCommitApply)
+    {
+      const auto storage_root = data_root_ / "direct_storage_final_segment_trusted_prefix";
+      auto storage = CreateFileRaftStorage(storage_root.string());
+      const auto state = MakeState(1, 513);
+      std::string error;
+
+      ASSERT_TRUE(storage->Save(state, &error)) << error;
+
+      const auto segment_files = ListFilesWithExtension(storage_root / "log", ".log");
+      ASSERT_EQ(segment_files.size(), 2U) << DescribeDirectoryTree(root_);
+      const auto final_segment = segment_files.back();
+
+      std::error_code ec;
+      const auto original_size = std::filesystem::file_size(final_segment, ec);
+      ASSERT_FALSE(ec) << ec.message();
+      ASSERT_GT(original_size, 1U) << final_segment.string();
+
+      std::filesystem::resize_file(final_segment, original_size - 1, ec);
+      ASSERT_FALSE(ec) << ec.message();
+
+      PersistentRaftState loaded;
+      bool has_state = false;
+      ASSERT_TRUE(storage->Load(&loaded, &has_state, &error)) << error;
+      ASSERT_TRUE(has_state);
+      ASSERT_EQ(loaded.log.size(), 512U) << DescribeDirectoryTree(root_);
+      EXPECT_EQ(loaded.log.back().index, 512U);
+      EXPECT_EQ(loaded.commit_index, 512U);
+      EXPECT_EQ(loaded.last_applied, 512U);
+      EXPECT_EQ(loaded.log.back().command, state.log[511].command);
+    }
+
     TEST_F(RaftSegmentStorageTest, LogDirectoryReplaceFailureNeedsExactFailureInjectionSeam)
     {
       const auto storage_root = data_root_ / "direct_storage_log_replace_injection_contract";
