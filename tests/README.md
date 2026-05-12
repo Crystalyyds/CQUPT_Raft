@@ -11,6 +11,14 @@
 4. `persistence_test.cpp` 使用 `std::filesystem::temp_directory_path()` 和 `std::filesystem::path`
    生成临时测试目录，避免平台相关路径分隔符问题。
 
+## `persistence_more_test.cpp` 的当前角色
+
+- `tests/persistence_more_test.cpp` 保留为 manual-only / diagnostic-only 的两阶段恢复演示程序。
+- 其中适合受管回归的恢复场景已经迁入 `tests/test_raft_snapshot_diagnosis.cpp`：
+  - `RaftSnapshotDiagnosisTest.RestartedSingleNodeLoadsSnapshotAndTailLogsWithoutPeers`
+  - `RaftSnapshotDiagnosisTest.CompactedClusterReplicatesNewLogAfterRestartedLeaderStepsDown`
+- 该手工程序仍保留的原因是：它会跨两次运行写入 marker 文件，并导出节点状态快照文本和 manifest，适合人工检查恢复工件，但不适合作为稳定的 CTest 回归入口。
+
 ## 需要的根目录 CMake 配合
 
 建议在根 `CMakeLists.txt` 的 `project(...)` 后加上：

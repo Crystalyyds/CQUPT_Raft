@@ -1,0 +1,300 @@
+# 003-persistence-reliability Decisions
+
+## D001
+
+- Decision: 本阶段只定义 durability contract，不修改代码
+- Status: Accepted
+- Reason: P0-1 的目标是先把现状能力、缺口和后续修补边界文档化，避免在缺少明确 contract 的情况下直接改高风险持久化路径
+
+## D002
+
+- Decision: 本阶段不修改持久化格式
+- Status: Accepted
+- Reason: `meta.bin`、segment log、snapshot metadata 和 snapshot data 的格式属于高风险兼容边界，Phase 1 只描述语义，不引入格式迁移
+
+## D003
+
+- Decision: 本阶段不引入新的 storage engine
+- Status: Accepted
+- Reason: 当前问题是 durability contract 不清晰，不是 storage engine 缺失；先收敛 contract 再决定实现手段
+
+## D004
+
+- Decision: 本阶段不处理 snapshot 性能优化
+- Status: Accepted
+- Reason: 当前关注点是 snapshot publish 的 durability 和 recovery 可信性，不是吞吐、压缩或 IO 性能
+
+## D005
+
+- Decision: 本阶段不处理 KV 逻辑
+- Status: Accepted
+- Reason: KV 状态机在本任务中只作为 snapshot 载体和恢复可观测面，不是本轮变更目标
+
+## D006
+
+- Decision: 本阶段允许把“当前行为”和“目标 contract”并列写出，但必须明确区分
+- Status: Accepted
+- Reason: 当前实现已经具备部分可恢复语义，但并不等价于目标 durability contract；若不显式区分，容易把未来目标误写成现状承诺
+
+## D007
+
+- Decision: 本阶段把“power loss 下未严格保证”作为显式结论
+- Status: Accepted
+- Reason: 当前代码没有 `fsync`、`fdatasync` 或 directory `fsync`，不能把成功返回表述为 power-loss-safe durability
+
+## D008
+
+- Decision: `Phase 2` 不处理 `meta.bin` / hard state；这些内容推迟到 `Phase 3`
+- Status: Accepted
+- Reason: `Phase 2` 只收敛 segment log durability，避免一次修改同时跨 `storage log`、`meta hard state` 和 `node core`
+
+## D009
+
+- Decision: `Phase 2` 实现仅落在 `WriteSegments`、segment tail truncate 和 `ReplaceDirectory`，不触碰 `ReplaceFile`
+- Status: Accepted
+- Reason: 当前 segment log append / truncate / `log/` directory publish 的同步需求可以在 log 文件和目录路径内闭合，不需要越界到 `meta.bin` publish
+
+## D010
+
+- Decision: 之前 `_WIN32` 分支中的 no-op flush 不满足跨平台 durability contract，Phase 2 必须消除这类静默成功路径
+- Status: Accepted
+- Reason: 如果 Windows 路径在 file flush 或 directory flush 上直接 `return true`，则 contract 只在 POSIX/Linux 上成立，不能称为跨平台 durability 语义
+
+## D011
+
+- Decision: Windows 分支使用 `FlushFileBuffers`；directory flush 使用 `CreateFileW` + `FILE_FLAG_BACKUP_SEMANTICS`，失败时必须返回错误
+- Status: Accepted
+- Reason: Phase 2 允许范围内只能在 storage helper 内补齐平台语义，不能把 Windows directory flush 继续作为静默 no-op
+
+## D012
+
+- Decision: Windows 路径当前属于 build-level completed / unverified runtime semantics
+- Status: Accepted
+- Reason: 本轮执行环境不是 Windows；代码路径已补齐，但未在 Windows 实机或 CI 上验证运行时语义
+
+## D013：跨平台 durability 不允许静默降级
+
+背景：
+
+Phase 2 中 segment log durability 实现引入了 POSIX fsync 语义，但 Windows 分支不能用 no-op success 占位，否则会让 durability contract 在不同平台上语义不一致。
+
+决策：
+
+- POSIX/Linux 使用真实 fsync。
+- Windows 使用 FlushFileBuffers。
+- 如果某个平台无法提供等价保证，必须明确返回错误或记录较弱保证。
+- 不允许平台分支静默 no-op 后返回成功。
+
+影响：
+
+后续 Phase 3 的 meta.bin / hard state fsync 语义也必须遵守这个规则。
+
+## D014
+
+- Decision: Phase 3A 只输出 `meta.bin` / hard state 的 affected-files plan 和测试设计，不修改业务代码
+- Status: Accepted
+- Reason: 当前目标是先把 `WriteMeta`、`ReplaceFile`、`PersistStateLocked` 的职责边界、测试场景和最小实现范围固定下来，避免在高风险 `node` / `storage` 边界上直接实现
+
+## D015
+
+- Decision: Phase 3A 的测试设计优先复用现有 `tests/test_raft_segment_storage.cpp` 与 `tests/persistence_test.cpp`
+- Status: Accepted
+- Reason: 本阶段只做计划与测试设计，不创建 task 子目录，也不预先引入新的测试 target；优先在已有 storage / persistence 测试面上扩展 `meta.bin` 与 hard state 场景
+
+## D016
+
+- Decision: Phase 3A 不扩大到 snapshot publish、segment log publish 或持久化格式修改
+- Status: Accepted
+- Reason: `meta.bin` / hard state durability 已经可以在 `WriteMeta`、`ReplaceFile`、`PersistStateLocked` 三个入口内闭合，当前没有发现必须越界到 Phase 2 或 Phase 4 的阻塞项
+
+## D017
+
+- Decision: Phase 3B 只处理 `meta.bin` / hard state 持久化语义，不处理 segment log、snapshot、KV、proto、RPC 或持久化格式变更
+- Status: Accepted
+- Reason: Phase 2 已经处理 segment log durability；Phase 3B 聚焦 hard state durability，避免一次修改跨多个持久化子系统
+
+## D018
+
+- Decision: Phase 3B 的最小实现只落在 `WriteMeta`、`ReplaceFile` 和 `PersistStateLocked`
+- Status: Accepted
+- Reason: `meta.bin` / hard state 的 durability 语义可以在这三个入口内闭合，不需要触碰 `WriteSegments`、`ReplaceDirectory`、snapshot publish 或持久化格式
+
+## D019
+
+- Decision: Phase 3B 继续复用 Phase 2 的跨平台 flush helper 约束，Windows 路径不允许出现新的 no-op success
+- Status: Accepted
+- Reason: `meta.bin` file / directory durability 与 segment log durability 共享同一跨平台 contract；如果 Phase 3B 在 Windows 路径退化为 no-op，则 hard state durability 语义会再次按平台分裂
+
+## D020
+
+- Decision: Phase 4 拆分为 `Phase 4A` 分析与任务生成，以及 `Phase 4B` 最小实现
+- Status: Accepted
+- Reason: snapshot publish 同时跨 `snapshot_storage`、`state_machine` 和 `raft_node` 编排边界；先固定 current path、crash window 和 trusted-state 规则，再实现原子发布，可以避免在高风险恢复路径上直接改动
+
+## D021
+
+- Decision: Phase 4B 的主实现面优先收敛在 `modules/raft/storage/snapshot_storage.cpp`，`raft_node.cpp` 与 `state_machine.cpp` 仅在证明存在 publish ordering 或失败传播缺口时最小触碰
+- Status: Accepted
+- Reason: 当前 direct-to-final-dir publish、`remove_all(final_dir)` 先删后发窗口、snapshot data/meta 缺少 `fsync` / directory `fsync` 都集中在 snapshot catalog 路径；node 与 state machine 主要承担编排和工作文件边界，默认不扩大改动
+
+## D022
+
+- Decision: Phase 4B 不修改 snapshot data / metadata 持久化格式，只收敛 snapshot atomic publish 语义
+- Status: Accepted
+- Reason: 当前问题是 publish protocol 与 durability barrier 缺失，不是 `data.bin` 或 `__raft_snapshot_meta` 编码不够；修改格式会引入兼容性和恢复迁移风险，超出本阶段目标
+
+## D023
+
+- Decision: Phase 4B 必须消除 snapshot direct-to-final-dir publish 和 `_WIN32` 静默成功式 durability 降级
+- Status: Accepted
+- Reason: 现有 `SaveSnapshotFile()` 直接写最终 `snapshot_<index>/` 目录，且目录 create/remove/publish 没有 durability barrier；如果 Phase 4B 仍保留 direct publish 或某个平台继续 no-op success，就无法满足跨平台 snapshot atomic publish contract
+
+## D024
+
+- Decision: Phase 4B 对同 index、同 term 的已有有效 snapshot 采用幂等成功，不删除并重写最终目录
+- Status: Accepted
+- Reason: 跨平台文件系统无法可靠提供“非空目录原子替换”的统一语义；对已经可信的同边界 snapshot 执行幂等返回，可以消除 `remove_all(final_dir)` 先删旧 snapshot 再发布新 snapshot 的 crash window
+
+## D025
+
+- Decision: Phase 4B 对同 index 但 term 不一致的已有有效 snapshot 返回明确错误，不进行目录替换
+- Status: Accepted
+- Reason: 同 index 不同 term 的 snapshot 边界不应被静默覆盖；在没有跨平台非空目录原子交换能力的前提下，显式失败比删除可信旧 snapshot 更符合 durability contract
+
+## D026
+
+- Decision: Phase 4B 暂不修改 `raft_node.cpp` 或 `state_machine.cpp`
+- Status: Accepted
+- Reason: 当前最小实现已在 `snapshot_storage.cpp` 内闭合 staged publish、snapshot data/meta file fsync、directory fsync 和 recovery 过滤规则；现有 snapshot / restart / diagnosis 测试未暴露 `SnapshotWorkerLoop`、`OnInstallSnapshot` 或 state machine 工作文件边界必须扩大修改
+
+## D027
+
+- Decision: Phase 4B 为 prune 删除路径补齐 `snapshot_dir` directory fsync，但不重写 prune 策略
+- Status: Accepted
+- Reason: prune 删除旧 snapshot 后的目录项 durability 可以通过删除后同步 `snapshot_dir` 收敛，不需要引入新的 prune 状态机、墓碑文件或持久化格式
+
+## D028
+
+- Decision: Phase 4B Windows snapshot flush 路径沿用 `FlushFileBuffers` 与 directory handle 方案，运行时语义未在 Windows 环境验证
+- Status: Accepted
+- Reason: 本轮执行环境是 POSIX/Linux；Windows 分支没有 no-op success，失败会返回错误，但没有 Windows 实机或 CI 结果，必须继续标记为未验证
+
+## D029
+
+- Decision: Phase 5 拆分为 `Phase 5A` 分析与任务生成，以及 `Phase 5B` 最小实现
+- Status: Accepted
+- Reason: restart recovery 同时跨 `meta.bin`、segment log、snapshot catalog、state machine load 和 node startup replay；先固定 current behavior、trusted-state 边界和诊断缺口，再实现校验与诊断，避免直接改动高风险恢复路径
+
+## D030
+
+- Decision: Phase 5B 不修改持久化格式，只补 recovery 校验、诊断上下文和测试
+- Status: Accepted
+- Reason: 当前缺口集中在恢复时的可解释性、边界一致性诊断和测试覆盖；不需要改变 `meta.bin`、segment log、snapshot data 或 snapshot metadata 的编码格式
+
+## D031
+
+- Decision: Phase 5B 默认保持现有 recovery 语义：meta/log 必须一致，坏 segment tail 可截断，snapshot 最新有效优先且无效回退，snapshot 加载后 replay committed tail log
+- Status: Accepted
+- Reason: Phase 5 的目标是 validation and diagnostics，不是重写恢复策略；只有测试证明存在正确性 bug 时，才允许在 Phase 5 范围内做最小行为修正并记录原因
+
+## D032
+
+- Decision: Phase 5B 需要暴露 snapshot skip reason，但不把 invalid snapshot 变成 fatal error
+- Status: Accepted
+- Reason: 当前 contract 明确允许跳过无效 snapshot 并回退到更旧有效 snapshot；Phase 5B 应让“为什么跳过”和“为什么选择”可诊断，而不是改变 trusted snapshot 选择语义
+
+## D033
+
+- Decision: 已观察到的 `RaftSnapshotRecoveryTest.SavesSnapshotAndRestoresAfterRestart` 稳定性问题归入 Phase 5B 测试诊断范围，不通过删除或跳过测试处理
+- Status: Accepted
+- Reason: 该测试属于 snapshot restart recovery 可观测面；Phase 5B 应检查失败原因、补足诊断或稳定测试前置条件，不能用跳过失败测试规避恢复路径问题
+
+## D034
+
+- Decision: Phase 5B 为 `ISnapshotStorage` 增加 `ListSnapshotsWithDiagnostics`，用于暴露 snapshot catalog skip reason
+- Status: Accepted
+- Reason: node startup 只能通过 snapshot storage 接口观察 trusted snapshot candidates；如果不在 storage 接口暴露 validation issues，startup recovery 无法解释缺失 meta、缺失 data、checksum mismatch 或 staging 目录为什么没有成为可信 snapshot
+
+## D035
+
+- Decision: Phase 5B 只增强 recovery 校验和诊断，不修改已有 fsync / publish 语义
+- Status: Accepted
+- Reason: Phase 2-4 已分别处理 segment log、meta hard state 和 snapshot atomic publish 的 durability barrier；Phase 5B 聚焦 recovery 可解释性和 trusted-state validation，避免把诊断工作扩大成新的 durability 实现阶段
+
+## D036
+
+- Decision: Phase 5B 保持 invalid snapshot 非 fatal 的恢复语义
+- Status: Accepted
+- Reason: 当前 durability contract 要求 snapshot 最新有效优先、无效跳过并允许回退旧有效 snapshot；新增 skip reason 只提升诊断能力，不改变恢复选择策略
+
+## D037
+
+- Decision: Phase 6 拆分为 `Phase 6A` 分析与任务生成，以及 `Phase 6B` crash / failure injection 测试最小实现
+- Status: Accepted
+- Reason: crash / failure injection 会跨 meta、segment log、snapshot publish 和 restart recovery；先固定 crash window、已有覆盖和注入缺口，可以避免直接引入过宽测试框架或误改业务代码
+
+## D038
+
+- Decision: Phase 6B 先补文件 / 目录构造类测试，再为无法构造的中间失败点引入 test-only failure injection
+- Status: Accepted
+- Reason: 现有测试已经能通过坏文件和坏目录验证部分 trusted-state 判定；只有 fsync、directory fsync、rename / replace、remove / prune、partial write 等精确中间失败无法靠文件构造稳定覆盖
+
+## D039
+
+- Decision: Phase 6B 的 failure injection 必须默认关闭，且不得改变生产路径语义、持久化格式、Raft 协议或 KV 行为
+- Status: Accepted
+- Reason: Phase 6 的目标是验证 crash / failure 窗口，不是新增运行时功能；注入点只能作为测试可观测性手段，不能成为新的持久化协议或磁盘格式
+
+## D040
+
+- Decision: Phase 6B 需要新增或更新 crash matrix 文档
+- Status: Accepted
+- Reason: meta、segment log、snapshot publish 和 restart recovery 的 crash window 数量已经超过单个测试文件能直观看清的范围；用矩阵映射对象、操作、crash point、预期恢复行为和测试方式，能防止遗漏关键窗口
+
+## D041
+
+- Decision: 注入的 durability failure 必须以错误形式暴露，不能用 no-op success 模拟
+- Status: Accepted
+- Reason: 根 `AGENTS.md` 和 storage 模块规则明确禁止 required durability operations 静默降级；Phase 6 的测试必须验证失败传播和可信状态判定，而不是把失败路径伪装成成功
+
+## D042
+
+- Decision: Phase 6B 不修改生产 `.h` / `.cpp`，只补充文件 / 目录构造类 crash artifact 测试
+- Status: Accepted
+- Reason: 用户要求优先通过坏文件、坏目录、temp 残留和 checksum 损坏模拟 crash / power loss 近似场景；当前最小测试增量可以在现有测试文件内完成，不需要为了 Phase 6B 扩大到生产代码 hook
+
+## D043
+
+- Decision: 精确 `fsync`、directory `fsync`、rename / replace、remove / prune、partial write failure injection 推迟到后续明确批准的 test-only hook 阶段
+- Status: Accepted
+- Reason: 这些失败点无法仅靠文件构造稳定模拟；若要覆盖，需要在 storage 持久化路径加入测试专用注入点。Phase 6B 不擅自修改生产代码，因此将 T613-T616 标记为 deferred，而不是用不可靠的平台权限技巧或 no-op success 伪造覆盖
+
+## D044
+
+- Decision: Phase 6B 的 crash matrix 放入阶段报告，不新增独立 `crash-matrix.md`
+- Status: Accepted
+- Reason: 当前允许修改的 spec 文件不包括新的 crash matrix 文档；将矩阵写入阶段报告可以满足覆盖映射需求，同时避免扩大文档文件范围
+
+## D045
+
+- Decision: Final validation task generation 当前只覆盖 Linux，不生成 Windows 测试任务
+- Status: Accepted
+- Reason: 本轮目标是基于最终验收文档生成 Linux-only 总测试任务；当前不测试 Windows、不要求 Windows 实机验证，也不能把 Linux 测试结果表述为跨平台完全验证
+
+## D046
+
+- Decision: Windows durability runtime semantics 继续标记为未实机验证
+- Status: Accepted
+- Reason: Windows 分支已有 `FlushFileBuffers` / directory handle 代码路径和 no-op success 禁止约束，但当前验收任务不包含 Windows CI 或实机执行，因此只能保留未验证说明
+
+## D047
+
+- Decision: 本轮只生成测试任务，不执行测试、不修改代码
+- Status: Accepted
+- Reason: 用户明确要求不要执行测试、不要新增测试代码、不要修 bug、不要进入新的实现阶段；本轮只更新 `tasks.md`、`progress.md` 和 `decisions.md`
+
+## D048
+
+- Decision: Final Linux Validation 当前被测试时序稳定性问题阻塞，不能把失败归因写成 persistence durability 已失败
+- Status: Accepted
+- Reason: `RaftSnapshotRecoveryTest.SavesSnapshotAndRestoresAfterRestart` 已在单独重复运行中复现 leadership loss，`RaftSplitBrainTest.MinorityLeaderTimesOutAndDoesNotApplyUncommittedCommand` 也已在单独 CTest 运行中复现 leader election timeout；两者都需要先按测试时序 / leader churn 稳定性问题处理，修复前不得顺手修改生产 Raft 逻辑、持久化格式或协议语义

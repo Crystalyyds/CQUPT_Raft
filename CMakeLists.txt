@@ -61,7 +61,7 @@ message(STATUS "Using gRPC ${gRPC_VERSION}")
 
 set(PROTO_FILE ${CMAKE_CURRENT_SOURCE_DIR}/proto/raft.proto)
 set(GENERATED_DIR ${CMAKE_CURRENT_BINARY_DIR}/generated)
-set(PROJECT_INCLUDE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/include)
+set(PROJECT_INCLUDE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/modules)
 
 file(MAKE_DIRECTORY ${GENERATED_DIR})
 
@@ -113,15 +113,16 @@ target_link_libraries(raft_proto
 )
 
 add_library(raft_core
-  src/min_heap_timer.cpp
-  src/thread_pool.cpp
-  src/command.cpp
-  src/raft_node.cpp
-  src/raft_service_impl.cpp
-  src/state_machine.cpp
-  src/raft_storage.cpp
-  src/snapshot_storage.cpp
-  src/replicator.cpp
+  modules/raft/runtime/min_heap_timer.cpp
+  modules/raft/runtime/thread_pool.cpp
+  modules/raft/common/command.cpp
+  modules/raft/node/raft_node.cpp
+  modules/raft/service/raft_service_impl.cpp
+  modules/raft/service/kv_service_impl.cpp
+  modules/raft/state_machine/state_machine.cpp
+  modules/raft/storage/raft_storage.cpp
+  modules/raft/storage/snapshot_storage.cpp
+  modules/raft/replication/replicator.cpp
 )
 
 target_include_directories(raft_core
@@ -137,12 +138,21 @@ target_link_libraries(raft_core
 )
 
 add_executable(raft_demo
-  src/main.cpp
+  apps/main.cpp
 )
 
 target_link_libraries(raft_demo
   PRIVATE
     raft_core
+)
+
+add_executable(raft_kv_client
+  apps/raft_kv_client.cpp
+)
+
+target_link_libraries(raft_kv_client
+  PRIVATE
+    raft_proto
 )
 
 enable_testing()

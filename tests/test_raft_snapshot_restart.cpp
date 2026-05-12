@@ -1,26 +1,32 @@
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <chrono>
 #include <cstdlib>
 #include <filesystem>
 #include <functional>
+#include <fstream>
+#include <iomanip>
 #include <iostream>
 #include <memory>
 #include <optional>
 #include <random>
+#include <sstream>
 #include <string>
 #include <thread>
 #include <vector>
 
-#include "raft/command.h"
-#include "raft/config.h"
-#include "raft/propose.h"
-#include "raft/raft_node.h"
+#include "raft/common/command.h"
+#include "raft/common/config.h"
+#include "raft/common/propose.h"
+#include "raft/node/raft_node.h"
+#include "raft/storage/snapshot_storage.h"
 
 namespace raftdemo {
 namespace {
 
 using Clock = std::chrono::steady_clock;
+constexpr const char* kSnapshotStorageFailpointEnv = "RAFT_TEST_SNAPSHOT_STORAGE_FAILPOINT";
 
 std::string ProposeStatusName(ProposeStatus status) {
   switch (status) {
@@ -50,6 +56,34 @@ bool Contains(const std::string& text, const std::string& needle) {
 
 bool IsLeaderNode(const std::shared_ptr<RaftNode>& node) {
   return node && Contains(node->Describe(), "role=Leader");
+}
+
+std::string DescribeCluster(const std::vector<std::shared_ptr<RaftNode>>& nodes,
+                            const std::vector<std::size_t>& excluded = {}) {
+  std::ostringstream oss;
+  for (std::size_t i = 0; i < nodes.size(); ++i) {
+    bool excluded_node = false;
+    for (std::size_t excluded_index : excluded) {
+      if (excluded_index == i) {
+        excluded_node = true;
+        break;
+      }
+    }
+    if (i != 0) {
+      oss << " | ";
+    }
+    oss << "node[" << i << "]";
+    if (excluded_node) {
+      oss << "(excluded)";
+    }
+    oss << "=";
+    if (!nodes[i]) {
+      oss << "null";
+    } else {
+      oss << nodes[i]->Describe();
+    }
+  }
+  return oss.str();
 }
 
 Command SetCommand(const std::string& key, const std::string& value) {
@@ -96,6 +130,145 @@ std::filesystem::path MakeTestRoot(const std::string& test_name) {
                            std::to_string(NowForPath()) + "_" +
                            std::to_string(rd());
   return std::filesystem::temp_directory_path() / name;
+}
+
+void WriteTextFile(const std::filesystem::path& path, const std::string& content) {
+  std::filesystem::create_directories(path.parent_path());
+  std::ofstream out(path, std::ios::binary | std::ios::trunc);
+  ASSERT_TRUE(out.is_open()) << path.string();
+  out << content;
+  out.flush();
+  ASSERT_TRUE(static_cast<bool>(out)) << path.string();
+}
+
+void CopyFile(const std::filesystem::path& from, const std::filesystem::path& to) {
+  std::error_code ec;
+  std::filesystem::create_directories(to.parent_path(), ec);
+  ASSERT_FALSE(ec) << ec.message();
+  std::filesystem::copy_file(from, to, std::filesystem::copy_options::overwrite_existing, ec);
+  ASSERT_FALSE(ec) << "copy snapshot input failed: from=" << from.string()
+                   << ", to=" << to.string() << ", error=" << ec.message();
+}
+
+void CopyDirectoryRecursively(const std::filesystem::path& from,
+                              const std::filesystem::path& to) {
+  std::error_code ec;
+  std::filesystem::create_directories(to.parent_path(), ec);
+  ASSERT_FALSE(ec) << ec.message();
+  std::filesystem::copy(from,
+                        to,
+                        std::filesystem::copy_options::recursive |
+                            std::filesystem::copy_options::overwrite_existing,
+                        ec);
+  ASSERT_FALSE(ec) << "copy snapshot directory failed: from=" << from.string()
+                   << ", to=" << to.string() << ", error=" << ec.message();
+}
+
+std::string JoinIssueReasons(const std::vector<SnapshotValidationIssue>& issues) {
+  std::ostringstream oss;
+  for (const auto& issue : issues) {
+    oss << issue.path << ": " << issue.reason << "\n";
+  }
+  return oss.str();
+}
+
+std::string FormatSnapshotIndex(std::uint64_t index) {
+  std::ostringstream oss;
+  oss << std::setw(20) << std::setfill('0') << index;
+  return oss.str();
+}
+
+std::string PendingT010Message(const std::string& operation,
+                               const std::filesystem::path& path,
+                               const std::string& trusted_state_expectation,
+                               const std::string& diagnostic_expectation) {
+  std::ostringstream oss;
+  oss << "TODO(T010): missing snapshot storage failure injection seam"
+      << ", operation=" << operation
+      << ", path=" << path.string()
+      << ", linux_specific=true"
+      << ", trusted_state_expectation=" << trusted_state_expectation
+      << ", diagnostic_expectation=" << diagnostic_expectation;
+  return oss.str();
+}
+
+void SetEnvVar(const char* name, const std::string& value) {
+#if defined(_WIN32)
+  ASSERT_EQ(_putenv_s(name, value.c_str()), 0) << name;
+#else
+  ASSERT_EQ(::setenv(name, value.c_str(), 1), 0) << name;
+#endif
+}
+
+void UnsetEnvVar(const char* name) {
+#if defined(_WIN32)
+  ASSERT_EQ(_putenv_s(name, ""), 0) << name;
+#else
+  ASSERT_EQ(::unsetenv(name), 0) << name;
+#endif
+}
+
+class ScopedEnvVar {
+ public:
+  ScopedEnvVar(const char* name, std::string value)
+      : name_(name) {
+    const char* current = std::getenv(name_);
+    if (current != nullptr) {
+      had_original_ = true;
+      original_value_ = current;
+    }
+    SetEnvVar(name_, value);
+  }
+
+  ~ScopedEnvVar() {
+    if (had_original_) {
+      SetEnvVar(name_, original_value_);
+    } else {
+      UnsetEnvVar(name_);
+    }
+  }
+
+ private:
+  const char* name_;
+  bool had_original_{false};
+  std::string original_value_;
+};
+
+std::vector<std::filesystem::path> ListSnapshotDirs(const std::filesystem::path& snapshot_root) {
+  std::vector<std::filesystem::path> dirs;
+  std::error_code ec;
+  if (!std::filesystem::exists(snapshot_root, ec)) {
+    return dirs;
+  }
+
+  for (const auto& entry : std::filesystem::directory_iterator(snapshot_root, ec)) {
+    if (ec) {
+      break;
+    }
+    if (!entry.is_directory()) {
+      continue;
+    }
+    const std::string name = entry.path().filename().string();
+    if (name.rfind("snapshot_", 0) == 0) {
+      dirs.push_back(entry.path());
+    }
+  }
+
+  std::sort(dirs.begin(), dirs.end());
+  return dirs;
+}
+
+std::optional<std::uint64_t> SnapshotIndexFromDir(const std::filesystem::path& snapshot_dir) {
+  const std::string name = snapshot_dir.filename().string();
+  constexpr std::size_t kPrefixSize = 9;  // "snapshot_"
+  if (name.size() <= kPrefixSize || name.rfind("snapshot_", 0) != 0) {
+    return std::nullopt;
+  }
+  try {
+    return static_cast<std::uint64_t>(std::stoull(name.substr(kPrefixSize)));
+  } catch (...) {
+    return std::nullopt;
+  }
 }
 
 std::optional<std::uint64_t> ExtractUintField(const std::string& describe,
@@ -323,19 +496,118 @@ std::size_t PickFollowerIndex(const std::vector<std::shared_ptr<RaftNode>>& node
   return nodes.size();
 }
 
+struct StableLeaderObservation {
+  std::shared_ptr<RaftNode> leader;
+  std::size_t leader_index{0};
+  int stable_observations{0};
+  std::string diagnostics;
+};
+
+std::optional<StableLeaderObservation> WaitForStableLeader(
+    const std::vector<std::shared_ptr<RaftNode>>& nodes,
+    std::chrono::milliseconds timeout,
+    const std::vector<std::size_t>& excluded = {},
+    int required_observations = 3) {
+  const auto deadline = Clock::now() + timeout;
+  std::size_t last_leader_index = nodes.size();
+  int stable_observations = 0;
+  int last_leader_count = 0;
+  std::string last_cluster_state;
+
+  while (Clock::now() < deadline) {
+    std::shared_ptr<RaftNode> leader;
+    std::size_t leader_index = nodes.size();
+    int leader_count = 0;
+
+    for (std::size_t i = 0; i < nodes.size(); ++i) {
+      if (IsExcluded(i, excluded) || !nodes[i]) {
+        continue;
+      }
+      if (IsLeaderNode(nodes[i])) {
+        leader = nodes[i];
+        leader_index = i;
+        ++leader_count;
+      }
+    }
+
+    last_leader_count = leader_count;
+    last_cluster_state = DescribeCluster(nodes, excluded);
+
+    if (leader_count == 1) {
+      if (leader_index == last_leader_index) {
+        ++stable_observations;
+      } else {
+        last_leader_index = leader_index;
+        stable_observations = 1;
+      }
+
+      if (stable_observations >= required_observations) {
+        StableLeaderObservation observation;
+        observation.leader = leader;
+        observation.leader_index = leader_index;
+        observation.stable_observations = stable_observations;
+        observation.diagnostics =
+            "stable leader_index=" + std::to_string(leader_index) +
+            ", observations=" + std::to_string(stable_observations) +
+            ", leader=" + leader->Describe() +
+            ", cluster=" + last_cluster_state;
+        return observation;
+      }
+    } else {
+      last_leader_index = nodes.size();
+      stable_observations = 0;
+    }
+
+    std::this_thread::sleep_for(std::chrono::milliseconds(50));
+  }
+
+  StableLeaderObservation observation;
+  observation.leader_index = last_leader_index;
+  observation.stable_observations = stable_observations;
+  observation.diagnostics =
+      "leader did not stabilize, last_leader_count=" +
+      std::to_string(last_leader_count) +
+      ", last_leader_index=" + std::to_string(last_leader_index) +
+      ", stable_observations=" + std::to_string(stable_observations) +
+      ", cluster=" + last_cluster_state;
+  return std::nullopt;
+}
+
 bool WaitForValueOnNode(const std::shared_ptr<RaftNode>& node,
                         const std::string& key,
                         const std::string& expected_value,
-                        std::chrono::milliseconds timeout) {
+                        std::chrono::milliseconds timeout,
+                        std::string* diagnostics = nullptr) {
   const auto deadline = Clock::now() + timeout;
+  std::string last_value;
+  std::string last_describe = node ? node->Describe() : "null";
+  bool saw_value = false;
   while (Clock::now() < deadline) {
     if (node) {
       std::string value;
       if (node->DebugGetValue(key, &value) && value == expected_value) {
+        if (diagnostics != nullptr) {
+          *diagnostics = "value observed, key=" + key + ", value=" + value +
+                         ", describe=" + node->Describe();
+        }
         return true;
       }
+      if (node->DebugGetValue(key, &value)) {
+        saw_value = true;
+        last_value = value;
+      } else {
+        saw_value = false;
+        last_value.clear();
+      }
+      last_describe = node->Describe();
     }
     std::this_thread::sleep_for(std::chrono::milliseconds(50));
+  }
+  if (diagnostics != nullptr) {
+    *diagnostics = "value not observed, key=" + key +
+                   ", expected=" + expected_value +
+                   ", observed=" + (saw_value ? last_value : "<missing>") +
+                   ", describe=" + last_describe;
   }
   return false;
 }
@@ -344,10 +616,13 @@ bool WaitForValueOnAll(const std::vector<std::shared_ptr<RaftNode>>& nodes,
                        const std::string& key,
                        const std::string& expected_value,
                        std::chrono::milliseconds timeout,
-                       const std::vector<std::size_t>& excluded = {}) {
+                       const std::vector<std::size_t>& excluded = {},
+                       std::string* diagnostics = nullptr) {
   const auto deadline = Clock::now() + timeout;
+  std::string last_cluster_state;
   while (Clock::now() < deadline) {
     bool all_match = true;
+    std::ostringstream cluster_values;
 
     for (std::size_t i = 0; i < nodes.size(); ++i) {
       if (IsExcluded(i, excluded) || !nodes[i]) {
@@ -355,17 +630,40 @@ bool WaitForValueOnAll(const std::vector<std::shared_ptr<RaftNode>>& nodes,
       }
 
       std::string value;
+      if (cluster_values.tellp() > 0) {
+        cluster_values << " | ";
+      }
+      cluster_values << "node[" << i << "]=";
       if (!nodes[i]->DebugGetValue(key, &value) || value != expected_value) {
+        if (nodes[i]->DebugGetValue(key, &value)) {
+          cluster_values << value;
+        } else {
+          cluster_values << "<missing>";
+        }
         all_match = false;
         break;
       }
+      cluster_values << value;
     }
 
+    last_cluster_state = cluster_values.str();
+
     if (all_match) {
+      if (diagnostics != nullptr) {
+        *diagnostics = "value observed on all nodes, key=" + key +
+                       ", value=" + expected_value +
+                       ", cluster=" + DescribeCluster(nodes, excluded);
+      }
       return true;
     }
 
     std::this_thread::sleep_for(std::chrono::milliseconds(50));
+  }
+  if (diagnostics != nullptr) {
+    *diagnostics = "value not observed on all nodes, key=" + key +
+                   ", expected=" + expected_value +
+                   ", cluster_values=" + last_cluster_state +
+                   ", cluster=" + DescribeCluster(nodes, excluded);
   }
   return false;
 }
@@ -373,16 +671,35 @@ bool WaitForValueOnAll(const std::vector<std::shared_ptr<RaftNode>>& nodes,
 bool WaitForNodeFieldAtLeast(const std::shared_ptr<RaftNode>& node,
                              const std::string& field_name,
                              std::uint64_t minimum,
-                             std::chrono::milliseconds timeout) {
+                             std::chrono::milliseconds timeout,
+                             std::string* diagnostics = nullptr) {
   const auto deadline = Clock::now() + timeout;
+  std::optional<std::uint64_t> last_value;
+  std::string last_describe = node ? node->Describe() : "null";
   while (Clock::now() < deadline) {
     if (node) {
-      const auto value = ExtractUintField(node->Describe(), field_name);
+      last_describe = node->Describe();
+      const auto value = ExtractUintField(last_describe, field_name);
       if (value.has_value() && *value >= minimum) {
+        if (diagnostics != nullptr) {
+          *diagnostics = "field reached threshold, field=" + field_name +
+                         ", value=" + std::to_string(*value) +
+                         ", minimum=" + std::to_string(minimum) +
+                         ", describe=" + last_describe;
+        }
         return true;
       }
+      last_value = value;
     }
     std::this_thread::sleep_for(std::chrono::milliseconds(100));
+  }
+  if (diagnostics != nullptr) {
+    *diagnostics = "field did not reach threshold, field=" + field_name +
+                   ", observed=" +
+                   (last_value.has_value() ? std::to_string(*last_value)
+                                           : std::string("<missing>")) +
+                   ", minimum=" + std::to_string(minimum) +
+                   ", describe=" + last_describe;
   }
   return false;
 }
@@ -391,21 +708,41 @@ bool ProposeWithRetry(const std::vector<std::shared_ptr<RaftNode>>& nodes,
                       const Command& command,
                       std::chrono::milliseconds timeout,
                       ProposeResult* final_result,
-                      const std::vector<std::size_t>& excluded = {}) {
+                      const std::vector<std::size_t>& excluded = {},
+                      std::string* diagnostics = nullptr) {
   const auto deadline = Clock::now() + timeout;
   ProposeResult last_result;
+  std::size_t last_leader_index = nodes.size();
+  std::string last_leader_describe = "none";
+  std::string last_cluster_state = DescribeCluster(nodes, excluded);
+  int attempts = 0;
+  int no_stable_leader_rounds = 0;
 
   while (Clock::now() < deadline) {
-    auto leader = WaitForSingleLeader(nodes, std::chrono::milliseconds(1500), excluded);
-    if (!leader) {
+    auto stable_leader =
+        WaitForStableLeader(nodes, std::chrono::milliseconds(1500), excluded);
+    if (!stable_leader.has_value()) {
+      ++no_stable_leader_rounds;
+      last_cluster_state = DescribeCluster(nodes, excluded);
       std::this_thread::sleep_for(std::chrono::milliseconds(50));
       continue;
     }
 
-    last_result = leader->Propose(command);
+    ++attempts;
+    last_leader_index = stable_leader->leader_index;
+    last_leader_describe = stable_leader->leader->Describe();
+    last_cluster_state = DescribeCluster(nodes, excluded);
+
+    last_result = stable_leader->leader->Propose(command);
     if (last_result.Ok()) {
       if (final_result != nullptr) {
         *final_result = last_result;
+      }
+      if (diagnostics != nullptr) {
+        *diagnostics = "proposal committed, attempts=" + std::to_string(attempts) +
+                       ", leader_index=" + std::to_string(last_leader_index) +
+                       ", leader=" + last_leader_describe +
+                       ", cluster=" + last_cluster_state;
       }
       return true;
     }
@@ -422,6 +759,34 @@ bool ProposeWithRetry(const std::vector<std::shared_ptr<RaftNode>>& nodes,
   if (final_result != nullptr) {
     *final_result = last_result;
   }
+  if (diagnostics != nullptr) {
+    std::string category = "proposal_failure";
+    if (no_stable_leader_rounds > 0 && attempts == 0) {
+      category = "leader_not_stable_before_propose";
+    } else if (last_result.status == ProposeStatus::kNotLeader) {
+      category = "leadership_churn_during_propose";
+    } else if (last_result.status == ProposeStatus::kReplicationFailed ||
+               last_result.status == ProposeStatus::kTimeout ||
+               last_result.status == ProposeStatus::kCommitFailed) {
+      category = "proposal_failed_before_majority_or_commit";
+    } else if (last_result.status == ProposeStatus::kApplyFailed) {
+      category = "proposal_committed_but_apply_failed";
+    } else if (last_result.status == ProposeStatus::kInvalidCommand) {
+      category = "invalid_command";
+    } else if (last_result.status == ProposeStatus::kNodeStopping) {
+      category = "node_stopping";
+    }
+
+    *diagnostics =
+        "category=" + category +
+        ", attempts=" + std::to_string(attempts) +
+        ", no_stable_leader_rounds=" + std::to_string(no_stable_leader_rounds) +
+        ", last_leader_index=" + std::to_string(last_leader_index) +
+        ", last_leader=" + last_leader_describe +
+        ", last_status=" + ProposeStatusName(last_result.status) +
+        ", last_message=" + last_result.message +
+        ", cluster=" + last_cluster_state;
+  }
   return false;
 }
 
@@ -431,15 +796,18 @@ void WriteManyValues(const std::vector<std::shared_ptr<RaftNode>>& nodes,
                      const std::vector<std::size_t>& excluded = {}) {
   ProposeResult result;
   for (int i = 0; i < count; ++i) {
+    std::string diagnostics;
     SCOPED_TRACE(prefix + " write " + std::to_string(i));
     ASSERT_TRUE(ProposeWithRetry(nodes,
                                  SetCommand(prefix + "_" + std::to_string(i),
                                             "value_" + std::to_string(i)),
                                  std::chrono::seconds(10),
                                  &result,
-                                 excluded))
+                                 excluded,
+                                 &diagnostics))
         << "write failed, status=" << ProposeStatusName(result.status)
-        << ", message=" << result.message;
+        << ", message=" << result.message
+        << ", diagnostics=" << diagnostics;
   }
 }
 
@@ -490,6 +858,8 @@ class RaftSnapshotRestartTest : public ::testing::Test {
   std::filesystem::path snapshot_root_;
   int base_port_{0};
 };
+
+class RaftSnapshotRecoveryTest : public RaftSnapshotRestartTest {};
 
 TEST_F(RaftSnapshotRestartTest, FollowerKeepsStateAfterInstallSnapshotAndRestart) {
   auto cluster = MakeCluster("follower_snapshot_restart", true, 6);
@@ -547,45 +917,67 @@ TEST_F(RaftSnapshotRestartTest, LeaderKeepsCompactedSnapshotStateAfterRestart) {
   auto cluster = MakeCluster("leader_compaction_restart", true, 6);
   cluster.Start();
 
-  auto leader = WaitForSingleLeader(cluster.Nodes(), std::chrono::seconds(8));
-  ASSERT_NE(leader, nullptr) << "no leader elected";
+  auto stable_leader = WaitForStableLeader(cluster.Nodes(), std::chrono::seconds(8));
+  ASSERT_TRUE(stable_leader.has_value())
+      << "leader did not stabilize before baseline writes, cluster="
+      << DescribeCluster(cluster.Nodes());
+  auto leader = stable_leader->leader;
 
   WriteManyValues(cluster.Nodes(), "leader_restart", 32);
 
-  leader = WaitForSingleLeader(cluster.Nodes(), std::chrono::seconds(8));
-  ASSERT_NE(leader, nullptr) << "no leader after writes";
+  stable_leader = WaitForStableLeader(cluster.Nodes(), std::chrono::seconds(8));
+  ASSERT_TRUE(stable_leader.has_value())
+      << "leader did not stabilize after baseline writes, cluster="
+      << DescribeCluster(cluster.Nodes());
+  leader = stable_leader->leader;
   const std::size_t leader_index = FindNodeIndex(cluster.Nodes(), leader);
   ASSERT_LT(leader_index, cluster.Nodes().size()) << "failed to locate leader";
 
+  std::string snapshot_diagnostics;
   ASSERT_TRUE(WaitForNodeFieldAtLeast(cluster.Nodes()[leader_index],
                                       "last_snapshot_index", 6,
-                                      std::chrono::seconds(20)))
-      << "leader did not compact through snapshot, describe="
-      << cluster.Nodes()[leader_index]->Describe();
+                                      std::chrono::seconds(20),
+                                      &snapshot_diagnostics))
+      << "leader did not compact through snapshot, diagnostics="
+      << snapshot_diagnostics << ", cluster=" << DescribeCluster(cluster.Nodes());
 
   cluster.RestartNode(leader_index);
 
+  stable_leader = WaitForStableLeader(cluster.Nodes(), std::chrono::seconds(10));
+  ASSERT_TRUE(stable_leader.has_value())
+      << "leader did not stabilize after leader restart, cluster="
+      << DescribeCluster(cluster.Nodes());
+
+  std::string restore_diagnostics;
   ASSERT_TRUE(WaitForValueOnNode(cluster.Nodes()[leader_index],
                                  "leader_restart_31", "value_31",
-                                 std::chrono::seconds(15)))
-      << "restarted leader node did not reload snapshot/log state, describe="
-      << cluster.Nodes()[leader_index]->Describe();
+                                 std::chrono::seconds(15),
+                                 &restore_diagnostics))
+      << "restarted leader node did not reload snapshot/log state, diagnostics="
+      << restore_diagnostics << ", cluster=" << DescribeCluster(cluster.Nodes());
 
+  std::string snapshot_meta_diagnostics;
   ASSERT_TRUE(WaitForNodeFieldAtLeast(cluster.Nodes()[leader_index],
                                       "last_snapshot_index", 6,
-                                      std::chrono::seconds(10)))
-      << "restarted leader node lost snapshot metadata, describe="
-      << cluster.Nodes()[leader_index]->Describe();
+                                      std::chrono::seconds(10),
+                                      &snapshot_meta_diagnostics))
+      << "restarted leader node lost snapshot metadata, diagnostics="
+      << snapshot_meta_diagnostics
+      << ", cluster=" << DescribeCluster(cluster.Nodes());
 
   ProposeResult result;
+  std::string propose_diagnostics;
   ASSERT_TRUE(ProposeWithRetry(cluster.Nodes(), SetCommand("after_leader_restart", "ok"),
-                               std::chrono::seconds(15), &result))
+                               std::chrono::seconds(15), &result, {}, &propose_diagnostics))
       << "write after leader restart failed, status=" << ProposeStatusName(result.status)
-      << ", message=" << result.message;
+      << ", message=" << result.message
+      << ", diagnostics=" << propose_diagnostics;
 
+  std::string replication_diagnostics;
   ASSERT_TRUE(WaitForValueOnAll(cluster.Nodes(), "after_leader_restart", "ok",
-                                std::chrono::seconds(20)))
-      << "cluster did not continue replication after compacted leader restart";
+                                std::chrono::seconds(20), {}, &replication_diagnostics))
+      << "cluster did not continue replication after compacted leader restart, diagnostics="
+      << replication_diagnostics;
 }
 
 TEST_F(RaftSnapshotRestartTest, FullClusterRestartsAfterSnapshotAndContinuesWriting) {
@@ -681,6 +1073,320 @@ TEST_F(RaftSnapshotRestartTest, SnapshotAndPostSnapshotLogsRecoverAfterFullResta
   ASSERT_TRUE(WaitForValueOnAll(cluster.Nodes(), "after_tail_restart", "ok",
                                 std::chrono::seconds(20)))
       << "cluster did not continue after restoring snapshot + tail logs";
+}
+
+TEST_F(RaftSnapshotRecoveryTest, StandaloneRestartFallsBackToOlderTrustedSnapshotWhenNewestSnapshotIsCorrupted) {
+  constexpr std::uint64_t kSnapshotThreshold = 4;
+  const std::string case_name = "restart_trusted_snapshot_fallback";
+  auto cluster = MakeCluster(case_name, true, kSnapshotThreshold);
+  cluster.Start();
+
+  auto stable_leader = WaitForStableLeader(cluster.Nodes(), std::chrono::seconds(8));
+  ASSERT_TRUE(stable_leader.has_value())
+      << "leader did not stabilize before snapshot fallback test, cluster="
+      << DescribeCluster(cluster.Nodes());
+
+  WriteManyValues(cluster.Nodes(), "restart_fallback", 48);
+
+  stable_leader = WaitForStableLeader(cluster.Nodes(), std::chrono::seconds(8));
+  ASSERT_TRUE(stable_leader.has_value())
+      << "leader did not stabilize after baseline writes, cluster="
+      << DescribeCluster(cluster.Nodes());
+  const std::size_t leader_index = stable_leader->leader_index;
+
+  ASSERT_TRUE(WaitForNodeFieldAtLeast(cluster.Nodes()[leader_index],
+                                      "last_snapshot_index", 8,
+                                      std::chrono::seconds(20)))
+      << "leader did not create snapshots before restart fallback test, describe="
+      << cluster.Nodes()[leader_index]->Describe();
+
+  cluster.StopAll();
+
+  const std::filesystem::path node_snapshot_root =
+      snapshot_root_ / case_name / ("node_" + std::to_string(leader_index + 1));
+  const auto snapshot_dirs = ListSnapshotDirs(node_snapshot_root);
+  ASSERT_GE(snapshot_dirs.size(), 2U) << "need at least two published snapshots under "
+                                      << node_snapshot_root.string();
+
+  const auto older_snapshot_dir = snapshot_dirs[snapshot_dirs.size() - 2];
+  const auto latest_snapshot_dir = snapshot_dirs.back();
+  const auto older_snapshot_index = SnapshotIndexFromDir(older_snapshot_dir);
+  const auto latest_snapshot_index = SnapshotIndexFromDir(latest_snapshot_dir);
+  ASSERT_TRUE(older_snapshot_index.has_value()) << older_snapshot_dir.string();
+  ASSERT_TRUE(latest_snapshot_index.has_value()) << latest_snapshot_dir.string();
+  ASSERT_GT(*latest_snapshot_index, *older_snapshot_index);
+
+  WriteTextFile(latest_snapshot_dir / "data.bin", "corrupted-newest-snapshot");
+
+  auto configs = BuildThreeNodeConfigs(data_root_ / case_name, base_port_);
+  auto snapshot_configs =
+      BuildThreeSnapshotConfigs(snapshot_root_ / case_name, true, kSnapshotThreshold);
+  auto restarted = std::make_shared<RaftNode>(configs[leader_index], snapshot_configs[leader_index]);
+
+  std::string actual;
+  ASSERT_TRUE(restarted->DebugGetValue("restart_fallback_40", &actual))
+      << "restart did not retain data from a previously trusted snapshot after rejecting the corrupted newest snapshot, describe="
+      << restarted->Describe();
+  EXPECT_EQ(actual, "value_40");
+
+  const std::string description = restarted->Describe();
+  const auto restored_snapshot_index = ExtractUintField(description, "last_snapshot_index");
+  ASSERT_TRUE(restored_snapshot_index.has_value()) << description;
+  EXPECT_GE(*restored_snapshot_index, *older_snapshot_index)
+      << "restart should still recover from a trusted snapshot boundary after rejecting the corrupted newest snapshot, describe="
+      << description;
+}
+
+TEST_F(RaftSnapshotRecoveryTest, RestartAfterSnapshotPublishFailureNeedsExactFailureInjectionSeam) {
+  constexpr std::uint64_t kSnapshotThreshold = 4;
+  const std::string case_name = "restart_publish_failure_contract";
+  auto cluster = MakeCluster(case_name, true, kSnapshotThreshold);
+  cluster.Start();
+
+  auto stable_leader = WaitForStableLeader(cluster.Nodes(), std::chrono::seconds(8));
+  ASSERT_TRUE(stable_leader.has_value())
+      << "leader did not stabilize before publish failure test, cluster="
+      << DescribeCluster(cluster.Nodes());
+
+  WriteManyValues(cluster.Nodes(), "restart_publish", 48);
+
+  stable_leader = WaitForStableLeader(cluster.Nodes(), std::chrono::seconds(8));
+  ASSERT_TRUE(stable_leader.has_value())
+      << "leader did not stabilize after baseline writes, cluster="
+      << DescribeCluster(cluster.Nodes());
+  const std::size_t leader_index = stable_leader->leader_index;
+
+  ASSERT_TRUE(WaitForNodeFieldAtLeast(cluster.Nodes()[leader_index],
+                                      "last_snapshot_index", 8,
+                                      std::chrono::seconds(20)))
+      << "leader did not create snapshots before publish failure test, describe="
+      << cluster.Nodes()[leader_index]->Describe();
+
+  cluster.StopAll();
+
+  const std::filesystem::path node_snapshot_root =
+      snapshot_root_ / case_name / ("node_" + std::to_string(leader_index + 1));
+  auto storage = CreateFileSnapshotStorage(node_snapshot_root.string(), "snapshot");
+
+  std::vector<SnapshotMeta> trusted_snapshots;
+  std::string error;
+  ASSERT_TRUE(storage->ListSnapshots(&trusted_snapshots, &error)) << error;
+  ASSERT_FALSE(trusted_snapshots.empty()) << node_snapshot_root.string();
+
+  const SnapshotMeta trusted_before = trusted_snapshots.front();
+  const std::uint64_t injected_index = trusted_before.last_included_index + 4;
+  const std::filesystem::path injected_final_dir =
+      node_snapshot_root / ("snapshot_" + FormatSnapshotIndex(injected_index));
+  const std::filesystem::path injected_input =
+      root_ / "injected_snapshot_inputs" / ("node_" + std::to_string(leader_index + 1) + ".bin");
+  CopyFile(trusted_before.snapshot_path, injected_input);
+
+  SnapshotMeta unused_meta;
+  {
+    ScopedEnvVar failpoint(kSnapshotStorageFailpointEnv,
+                           "snapshot_publish_visible_before_trusted_directory_sync");
+    EXPECT_FALSE(storage->SaveSnapshotFile(injected_input.string(),
+                                          injected_index,
+                                          trusted_before.last_included_term,
+                                          &unused_meta,
+                                          &error));
+  }
+  EXPECT_NE(error.find("operation=snapshot publish visible before trusted directory sync"),
+            std::string::npos)
+      << error;
+  EXPECT_NE(error.find("path=" + injected_final_dir.string()), std::string::npos) << error;
+  EXPECT_NE(error.find("failure_class=directory sync"), std::string::npos) << error;
+  EXPECT_NE(error.find("linux_specific=true"), std::string::npos) << error;
+  EXPECT_NE(
+      error.find("trusted_state_expectation=if restart sees a newer snapshot publish point without the required trusted publish completion, it must reject that snapshot and continue from the previous trusted snapshot plus replayable log tail"),
+      std::string::npos)
+      << error;
+  EXPECT_NE(
+      error.find("recovery_expectation=if restart sees a newer snapshot publish point without the required trusted publish completion, it must reject that snapshot and continue from the previous trusted snapshot plus replayable log tail"),
+      std::string::npos)
+      << error;
+  EXPECT_NE(
+      error.find("diagnostic_expectation=error should identify that the newer snapshot publish point became visible without a trusted parent directory sync boundary"),
+      std::string::npos)
+      << error;
+
+  EXPECT_TRUE(std::filesystem::exists(injected_final_dir)) << injected_final_dir.string();
+  EXPECT_FALSE(std::filesystem::exists(injected_final_dir / "__raft_snapshot_meta"));
+
+  SnapshotMeta loaded_snapshot;
+  bool has_snapshot = false;
+  ASSERT_TRUE(storage->LoadLatestValidSnapshot(&loaded_snapshot, &has_snapshot, &error)) << error;
+  ASSERT_TRUE(has_snapshot);
+  EXPECT_EQ(loaded_snapshot.last_included_index, trusted_before.last_included_index);
+
+  SnapshotListResult diagnostics;
+  ASSERT_TRUE(storage->ListSnapshotsWithDiagnostics(&diagnostics, &error)) << error;
+  EXPECT_NE(JoinIssueReasons(diagnostics.validation_issues).find("open snapshot meta file failed"),
+            std::string::npos);
+
+  auto configs = BuildThreeNodeConfigs(data_root_ / case_name, base_port_);
+  auto snapshot_configs =
+      BuildThreeSnapshotConfigs(snapshot_root_ / case_name, true, kSnapshotThreshold);
+  auto restarted = std::make_shared<RaftNode>(configs[leader_index], snapshot_configs[leader_index]);
+
+  std::string actual;
+  ASSERT_TRUE(restarted->DebugGetValue("restart_publish_40", &actual))
+      << "restart did not retain trusted snapshot state after rejecting injected publish failure, describe="
+      << restarted->Describe();
+  EXPECT_EQ(actual, "value_40");
+
+  const std::string description = restarted->Describe();
+  const auto restored_snapshot_index = ExtractUintField(description, "last_snapshot_index");
+  ASSERT_TRUE(restored_snapshot_index.has_value()) << description;
+  EXPECT_LT(*restored_snapshot_index, injected_index)
+      << "restart should reject the injected untrusted snapshot publish boundary, describe="
+      << description;
+}
+
+TEST_F(RaftSnapshotRecoveryTest,
+       StandaloneRestartRejectsMetadataMismatchedVisibleSnapshotAndKeepsTrustedBoundary) {
+  constexpr std::uint64_t kSnapshotThreshold = 12;
+  const std::string case_name = "restart_snapshot_metadata_mismatch";
+  auto cluster = MakeCluster(case_name, true, kSnapshotThreshold);
+  cluster.Start();
+
+  auto stable_leader = WaitForStableLeader(cluster.Nodes(), std::chrono::seconds(8));
+  ASSERT_TRUE(stable_leader.has_value())
+      << "leader did not stabilize before metadata mismatch test, cluster="
+      << DescribeCluster(cluster.Nodes());
+
+  WriteManyValues(cluster.Nodes(), "metadata_mismatch", 30);
+
+  stable_leader = WaitForStableLeader(cluster.Nodes(), std::chrono::seconds(8));
+  ASSERT_TRUE(stable_leader.has_value())
+      << "leader did not stabilize after metadata mismatch writes, cluster="
+      << DescribeCluster(cluster.Nodes());
+  const std::size_t leader_index = stable_leader->leader_index;
+
+  ASSERT_TRUE(WaitForNodeFieldAtLeast(cluster.Nodes()[leader_index],
+                                      "last_snapshot_index",
+                                      24,
+                                      std::chrono::seconds(20)))
+      << "leader did not create enough snapshots before metadata mismatch test, describe="
+      << cluster.Nodes()[leader_index]->Describe();
+
+  cluster.StopAll();
+
+  const std::filesystem::path node_snapshot_root =
+      snapshot_root_ / case_name / ("node_" + std::to_string(leader_index + 1));
+  const auto snapshot_dirs = ListSnapshotDirs(node_snapshot_root);
+  ASSERT_GE(snapshot_dirs.size(), 2U) << "need at least two trusted snapshots under "
+                                      << node_snapshot_root.string();
+
+  const auto latest_snapshot_dir = snapshot_dirs.back();
+  const auto latest_snapshot_index = SnapshotIndexFromDir(latest_snapshot_dir);
+  ASSERT_TRUE(latest_snapshot_index.has_value()) << latest_snapshot_dir.string();
+
+  const std::uint64_t mismatched_visible_index = *latest_snapshot_index + kSnapshotThreshold;
+  const std::filesystem::path mismatched_visible_dir =
+      node_snapshot_root / ("snapshot_" + FormatSnapshotIndex(mismatched_visible_index));
+  CopyDirectoryRecursively(latest_snapshot_dir, mismatched_visible_dir);
+
+  auto storage = CreateFileSnapshotStorage(node_snapshot_root.string(), "snapshot");
+  SnapshotMeta loaded_snapshot;
+  bool has_snapshot = false;
+  std::string error;
+  ASSERT_TRUE(storage->LoadLatestValidSnapshot(&loaded_snapshot, &has_snapshot, &error)) << error;
+  ASSERT_TRUE(has_snapshot);
+  EXPECT_EQ(loaded_snapshot.last_included_index, *latest_snapshot_index)
+      << "metadata-mismatched visible snapshot directory must not replace the real trusted "
+         "snapshot boundary";
+
+  SnapshotListResult diagnostics;
+  ASSERT_TRUE(storage->ListSnapshotsWithDiagnostics(&diagnostics, &error)) << error;
+  bool saw_mismatched_dir_issue = false;
+  for (const auto& issue : diagnostics.validation_issues) {
+    if (issue.path.find(mismatched_visible_dir.string()) != std::string::npos) {
+      saw_mismatched_dir_issue = true;
+      break;
+    }
+  }
+  EXPECT_TRUE(saw_mismatched_dir_issue)
+      << "expected diagnostics for visible snapshot directory whose name does not match its "
+         "metadata index: "
+      << mismatched_visible_dir.string();
+
+  auto configs = BuildThreeNodeConfigs(data_root_ / case_name, base_port_);
+  auto snapshot_configs =
+      BuildThreeSnapshotConfigs(snapshot_root_ / case_name, true, kSnapshotThreshold);
+  auto restarted = std::make_shared<RaftNode>(configs[leader_index], snapshot_configs[leader_index]);
+
+  std::string actual;
+  ASSERT_TRUE(restarted->DebugGetValue("metadata_mismatch_29", &actual))
+      << "restart did not recover data after ignoring metadata-mismatched visible snapshot, "
+         "describe="
+      << restarted->Describe();
+  EXPECT_EQ(actual, "value_29");
+
+  const std::string description = restarted->Describe();
+  const auto restored_snapshot_index = ExtractUintField(description, "last_snapshot_index");
+  ASSERT_TRUE(restored_snapshot_index.has_value()) << description;
+  EXPECT_EQ(*restored_snapshot_index, *latest_snapshot_index)
+      << "restart should keep the real trusted snapshot boundary when a higher-index visible "
+         "snapshot directory has mismatched metadata, describe="
+      << description;
+  EXPECT_LT(*restored_snapshot_index, mismatched_visible_index) << description;
+}
+
+TEST_F(RaftSnapshotRecoveryTest, AllPublishedSnapshotsInvalidYieldNoTrustedSnapshot) {
+  constexpr std::uint64_t kSnapshotThreshold = 12;
+  const std::string case_name = "restart_all_invalid_snapshots";
+  auto cluster = MakeCluster(case_name, true, kSnapshotThreshold);
+  cluster.Start();
+
+  auto stable_leader = WaitForStableLeader(cluster.Nodes(), std::chrono::seconds(8));
+  ASSERT_TRUE(stable_leader.has_value())
+      << "leader did not stabilize before all-invalid snapshot test, cluster="
+      << DescribeCluster(cluster.Nodes());
+
+  WriteManyValues(cluster.Nodes(), "all_invalid_snapshot", 30);
+
+  stable_leader = WaitForStableLeader(cluster.Nodes(), std::chrono::seconds(8));
+  ASSERT_TRUE(stable_leader.has_value())
+      << "leader did not stabilize after all-invalid snapshot writes, cluster="
+      << DescribeCluster(cluster.Nodes());
+  const std::size_t leader_index = stable_leader->leader_index;
+
+  ASSERT_TRUE(WaitForNodeFieldAtLeast(cluster.Nodes()[leader_index],
+                                      "last_snapshot_index",
+                                      24,
+                                      std::chrono::seconds(20)))
+      << "leader did not create enough snapshots before all-invalid snapshot test, describe="
+      << cluster.Nodes()[leader_index]->Describe();
+
+  cluster.StopAll();
+
+  const std::filesystem::path node_snapshot_root =
+      snapshot_root_ / case_name / ("node_" + std::to_string(leader_index + 1));
+  const auto snapshot_dirs = ListSnapshotDirs(node_snapshot_root);
+  ASSERT_GE(snapshot_dirs.size(), 2U) << "need at least two trusted snapshots under "
+                                      << node_snapshot_root.string();
+
+  for (const auto& snapshot_dir : snapshot_dirs) {
+    WriteTextFile(snapshot_dir / "data.bin",
+                  "corrupted-all-invalid-" + snapshot_dir.filename().string());
+  }
+
+  auto storage = CreateFileSnapshotStorage(node_snapshot_root.string(), "snapshot");
+  SnapshotMeta loaded_snapshot;
+  bool has_snapshot = true;
+  std::string error;
+  ASSERT_TRUE(storage->LoadLatestValidSnapshot(&loaded_snapshot, &has_snapshot, &error)) << error;
+  EXPECT_FALSE(has_snapshot)
+      << "when every published snapshot is invalid, trusted snapshot selection must report that "
+         "no snapshot boundary is acceptable";
+
+  SnapshotListResult diagnostics;
+  ASSERT_TRUE(storage->ListSnapshotsWithDiagnostics(&diagnostics, &error)) << error;
+  EXPECT_TRUE(diagnostics.snapshots.empty())
+      << "all invalid snapshots must be excluded from the trusted snapshot list";
+  EXPECT_GE(diagnostics.validation_issues.size(), snapshot_dirs.size())
+      << "every invalid snapshot should contribute a validation issue";
 }
 
 }  // namespace

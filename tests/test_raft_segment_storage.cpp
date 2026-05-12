@@ -5,6 +5,7 @@
 #include <cstdlib>
 #include <cstdint>
 #include <filesystem>
+#include <fstream>
 #include <iostream>
 #include <memory>
 #include <optional>
@@ -14,11 +15,11 @@
 #include <thread>
 #include <vector>
 
-#include "raft/command.h"
-#include "raft/config.h"
-#include "raft/propose.h"
-#include "raft/raft_node.h"
-#include "raft/raft_storage.h"
+#include "raft/common/command.h"
+#include "raft/common/config.h"
+#include "raft/common/propose.h"
+#include "raft/node/raft_node.h"
+#include "raft/storage/raft_storage.h"
 
 namespace raftdemo
 {
@@ -224,6 +225,19 @@ namespace raftdemo
       return state;
     }
 
+    template <typename T>
+    void OverwriteBinaryField(const std::filesystem::path &path,
+                              std::streamoff offset,
+                              const T &value)
+    {
+      std::fstream io(path, std::ios::binary | std::ios::in | std::ios::out);
+      ASSERT_TRUE(io.is_open()) << path.string();
+      io.seekp(offset);
+      ASSERT_TRUE(static_cast<bool>(io)) << "failed to seek " << path.string();
+      io.write(reinterpret_cast<const char *>(&value), sizeof(T));
+      ASSERT_TRUE(static_cast<bool>(io)) << "failed to overwrite " << path.string();
+    }
+
     std::string ProposeStatusName(ProposeStatus status)
     {
       switch (status)
@@ -251,6 +265,104 @@ namespace raftdemo
     bool Contains(const std::string &text, const std::string &needle)
     {
       return text.find(needle) != std::string::npos;
+    }
+
+    void WriteBinaryFile(const std::filesystem::path &path, const std::string &content)
+    {
+      std::error_code ec;
+      std::filesystem::create_directories(path.parent_path(), ec);
+      ASSERT_FALSE(ec) << "failed to create parent for " << path.string()
+                       << ": " << ec.message();
+
+      std::ofstream out(path, std::ios::binary | std::ios::trunc);
+      ASSERT_TRUE(out.is_open()) << path.string();
+      out.write(content.data(), static_cast<std::streamsize>(content.size()));
+      out.flush();
+      ASSERT_TRUE(static_cast<bool>(out)) << "failed to write " << path.string();
+    }
+
+    void SetEnvVar(const char *name, const char *value)
+    {
+#if defined(_WIN32)
+      ASSERT_EQ(_putenv_s(name, value), 0);
+#else
+      ASSERT_EQ(setenv(name, value, 1), 0);
+#endif
+    }
+
+    void UnsetEnvVar(const char *name)
+    {
+#if defined(_WIN32)
+      ASSERT_EQ(_putenv_s(name, ""), 0);
+#else
+      ASSERT_EQ(unsetenv(name), 0);
+#endif
+    }
+
+    class ScopedEnvVar
+    {
+    public:
+      ScopedEnvVar(const char *name, const char *value) : name_(name)
+      {
+        const char *existing = std::getenv(name_);
+        if (existing != nullptr)
+        {
+          had_old_value_ = true;
+          old_value_ = existing;
+        }
+        SetEnvVar(name_, value);
+      }
+
+      ~ScopedEnvVar()
+      {
+        if (had_old_value_)
+        {
+          SetEnvVar(name_, old_value_.c_str());
+        }
+        else
+        {
+          UnsetEnvVar(name_);
+        }
+      }
+
+    private:
+      const char *name_;
+      bool had_old_value_{false};
+      std::string old_value_;
+    };
+
+    void ExpectInjectedFailure(const std::string &error,
+                               const std::string &operation,
+                               const std::filesystem::path &path,
+                               const std::string &failure_class,
+                               const std::string &trusted_state_expectation,
+                               const std::string &diagnostic_expectation)
+    {
+      EXPECT_NE(error.find("injected durability failure"), std::string::npos) << error;
+      EXPECT_NE(error.find("operation=" + operation), std::string::npos) << error;
+      EXPECT_NE(error.find("path=" + path.string()), std::string::npos) << error;
+      EXPECT_NE(error.find("failure_class=" + failure_class), std::string::npos) << error;
+      EXPECT_NE(error.find("linux_specific=true"), std::string::npos) << error;
+      EXPECT_NE(error.find("trusted_state_expectation=" + trusted_state_expectation), std::string::npos)
+          << error;
+      EXPECT_NE(error.find("recovery_expectation=" + trusted_state_expectation), std::string::npos)
+          << error;
+      EXPECT_NE(error.find("diagnostic_expectation=" + diagnostic_expectation), std::string::npos)
+          << error;
+    }
+
+    void ExpectLoadedStateMatches(const PersistentRaftState &loaded,
+                                  const PersistentRaftState &expected)
+    {
+      EXPECT_EQ(loaded.current_term, expected.current_term);
+      EXPECT_EQ(loaded.voted_for, expected.voted_for);
+      EXPECT_EQ(loaded.commit_index, expected.commit_index);
+      EXPECT_EQ(loaded.last_applied, expected.last_applied);
+      ASSERT_EQ(loaded.log.size(), expected.log.size());
+      ASSERT_FALSE(loaded.log.empty());
+      EXPECT_EQ(loaded.log.front().index, expected.log.front().index);
+      EXPECT_EQ(loaded.log.back().index, expected.log.back().index);
+      EXPECT_EQ(loaded.log.back().command, expected.log.back().command);
     }
 
     bool IsLeaderNode(const std::shared_ptr<RaftNode> &node)
@@ -723,6 +835,515 @@ namespace raftdemo
       EXPECT_EQ(loaded.log.back().index, 1300U);
       EXPECT_EQ(loaded.commit_index, 1300U);
       EXPECT_EQ(loaded.last_applied, 1300U);
+    }
+
+    TEST_F(RaftSegmentStorageTest, TruncatesCorruptedSegmentTailDuringRecovery)
+    {
+      const auto storage_root = data_root_ / "direct_storage_tail_truncate";
+      auto storage = CreateFileRaftStorage(storage_root.string());
+      auto state = MakeState(1, 900);
+
+      std::string error;
+      ASSERT_TRUE(storage->Save(state, &error)) << error;
+
+      const auto segment_files = ListFilesWithExtension(storage_root / "log", ".log");
+      ASSERT_GE(segment_files.size(), 2U) << DescribeDirectoryTree(root_);
+
+      const auto tail_segment = segment_files.back();
+      std::error_code ec;
+      const auto original_size = std::filesystem::file_size(tail_segment, ec);
+      ASSERT_FALSE(ec) << ec.message();
+
+      {
+        std::ofstream out(tail_segment, std::ios::binary | std::ios::app);
+        ASSERT_TRUE(out.is_open()) << tail_segment.string();
+        const std::string junk = "corrupted-tail-bytes";
+        out.write(junk.data(), static_cast<std::streamsize>(junk.size()));
+        out.flush();
+        ASSERT_TRUE(out) << "failed to append corruption to " << tail_segment.string();
+      }
+
+      const auto corrupted_size = std::filesystem::file_size(tail_segment, ec);
+      ASSERT_FALSE(ec) << ec.message();
+      ASSERT_GT(corrupted_size, original_size);
+
+      PersistentRaftState loaded;
+      bool has_state = false;
+      ASSERT_TRUE(storage->Load(&loaded, &has_state, &error)) << error;
+      ASSERT_TRUE(has_state);
+      ASSERT_EQ(loaded.log.size(), state.log.size());
+      EXPECT_EQ(loaded.log.front().index, state.log.front().index);
+      EXPECT_EQ(loaded.log.back().index, state.log.back().index);
+      EXPECT_EQ(loaded.log.back().command, state.log.back().command);
+
+      const auto truncated_size = std::filesystem::file_size(tail_segment, ec);
+      ASSERT_FALSE(ec) << ec.message();
+      EXPECT_EQ(truncated_size, original_size) << DescribeDirectoryTree(root_);
+    }
+
+    TEST_F(RaftSegmentStorageTest, TruncatesPartialSegmentHeaderDuringRecovery)
+    {
+      const auto storage_root = data_root_ / "direct_storage_partial_tail_header";
+      auto storage = CreateFileRaftStorage(storage_root.string());
+      auto state = MakeState(1, 900);
+
+      std::string error;
+      ASSERT_TRUE(storage->Save(state, &error)) << error;
+
+      const auto segment_files = ListFilesWithExtension(storage_root / "log", ".log");
+      ASSERT_GE(segment_files.size(), 2U) << DescribeDirectoryTree(root_);
+
+      const auto tail_segment = segment_files.back();
+      std::error_code ec;
+      const auto original_size = std::filesystem::file_size(tail_segment, ec);
+      ASSERT_FALSE(ec) << ec.message();
+
+      {
+        std::ofstream out(tail_segment, std::ios::binary | std::ios::app);
+        ASSERT_TRUE(out.is_open()) << tail_segment.string();
+        const char partial_header = '\x42';
+        out.write(&partial_header, 1);
+        out.flush();
+        ASSERT_TRUE(out) << "failed to append partial header to " << tail_segment.string();
+      }
+
+      PersistentRaftState loaded;
+      bool has_state = false;
+      ASSERT_TRUE(storage->Load(&loaded, &has_state, &error)) << error;
+      ASSERT_TRUE(has_state);
+      ASSERT_EQ(loaded.log.size(), state.log.size());
+      EXPECT_EQ(loaded.log.front().index, state.log.front().index);
+      EXPECT_EQ(loaded.log.back().index, state.log.back().index);
+      EXPECT_EQ(loaded.log.back().command, state.log.back().command);
+
+      const auto truncated_size = std::filesystem::file_size(tail_segment, ec);
+      ASSERT_FALSE(ec) << ec.message();
+      EXPECT_EQ(truncated_size, original_size) << DescribeDirectoryTree(root_);
+    }
+
+    TEST_F(RaftSegmentStorageTest, SaveDoesNotLeaveTemporaryOrBackupLogDirectories)
+    {
+      const auto storage_root = data_root_ / "direct_storage_publish_cleanup";
+      auto storage = CreateFileRaftStorage(storage_root.string());
+      std::string error;
+
+      ASSERT_TRUE(storage->Save(MakeState(1, 1300), &error)) << error;
+      EXPECT_TRUE(std::filesystem::exists(storage_root / "log"));
+      EXPECT_FALSE(std::filesystem::exists(storage_root / "log.tmp")) << DescribeDirectoryTree(root_);
+      EXPECT_FALSE(std::filesystem::exists(storage_root / "log.bak")) << DescribeDirectoryTree(root_);
+
+      auto compacted = MakeState(900, 1300);
+      compacted.log.front().command = "publish-boundary-entry";
+      ASSERT_TRUE(storage->Save(compacted, &error)) << error;
+
+      EXPECT_TRUE(std::filesystem::exists(storage_root / "log"));
+      EXPECT_FALSE(std::filesystem::exists(storage_root / "log.tmp")) << DescribeDirectoryTree(root_);
+      EXPECT_FALSE(std::filesystem::exists(storage_root / "log.bak")) << DescribeDirectoryTree(root_);
+    }
+
+    TEST_F(RaftSegmentStorageTest, SavePublishesMetaFileWithoutLeavingMetaTempFile)
+    {
+      const auto storage_root = data_root_ / "direct_storage_meta_publish";
+      auto storage = CreateFileRaftStorage(storage_root.string());
+      std::string error;
+
+      ASSERT_TRUE(storage->Save(MakeState(1, 256), &error)) << error;
+
+      EXPECT_TRUE(std::filesystem::exists(storage_root / "meta.bin")) << DescribeDirectoryTree(root_);
+      EXPECT_FALSE(std::filesystem::exists(storage_root / "meta.bin.tmp")) << DescribeDirectoryTree(root_);
+    }
+
+    TEST_F(RaftSegmentStorageTest, RecoveryIgnoresTemporaryPublishArtifacts)
+    {
+      const auto storage_root = data_root_ / "direct_storage_leftover_publish_artifacts";
+      auto storage = CreateFileRaftStorage(storage_root.string());
+      auto state = MakeState(1, 64);
+
+      std::string error;
+      ASSERT_TRUE(storage->Save(state, &error)) << error;
+
+      WriteBinaryFile(storage_root / "meta.bin.tmp", "partial-meta-temp");
+      WriteBinaryFile(storage_root / "log.tmp" / "segment_00000000000000000001.log",
+                      "partial-log-temp");
+      WriteBinaryFile(storage_root / "log.bak" / "segment_00000000000000000001.log",
+                      "old-log-backup");
+
+      PersistentRaftState loaded;
+      bool has_state = false;
+      ASSERT_TRUE(storage->Load(&loaded, &has_state, &error)) << error;
+      ASSERT_TRUE(has_state);
+      EXPECT_EQ(loaded.current_term, state.current_term);
+      EXPECT_EQ(loaded.voted_for, state.voted_for);
+      EXPECT_EQ(loaded.commit_index, state.commit_index);
+      EXPECT_EQ(loaded.last_applied, state.last_applied);
+      ASSERT_EQ(loaded.log.size(), state.log.size());
+      EXPECT_EQ(loaded.log.front().index, state.log.front().index);
+      EXPECT_EQ(loaded.log.back().index, state.log.back().index);
+      EXPECT_EQ(loaded.log.back().command, state.log.back().command);
+    }
+
+    TEST_F(RaftSegmentStorageTest, MetaAndLogPublishWindowUsesOnlyTrustedBoundary)
+    {
+      const auto storage_root = data_root_ / "direct_storage_meta_log_publish_window";
+      const auto saved_root = root_ / "saved_publish_states";
+      auto storage = CreateFileRaftStorage(storage_root.string());
+
+      const auto old_state = MakeState(1, 16);
+      const auto new_state = MakeState(1, 32);
+      std::string error;
+
+      ASSERT_TRUE(storage->Save(old_state, &error)) << error;
+      std::error_code ec;
+      std::filesystem::create_directories(saved_root, ec);
+      ASSERT_FALSE(ec) << ec.message();
+      std::filesystem::copy_file(storage_root / "meta.bin", saved_root / "old_meta.bin",
+                                 std::filesystem::copy_options::overwrite_existing, ec);
+      ASSERT_FALSE(ec) << ec.message();
+      std::filesystem::copy(storage_root / "log", saved_root / "old_log",
+                            std::filesystem::copy_options::recursive |
+                                std::filesystem::copy_options::overwrite_existing,
+                            ec);
+      ASSERT_FALSE(ec) << ec.message();
+
+      ASSERT_TRUE(storage->Save(new_state, &error)) << error;
+      std::filesystem::copy_file(storage_root / "meta.bin", saved_root / "new_meta.bin",
+                                 std::filesystem::copy_options::overwrite_existing, ec);
+      ASSERT_FALSE(ec) << ec.message();
+
+      // Simulate crash after publishing new log/ but before publishing new meta.bin:
+      // recovery must be bounded by the old complete meta state.
+      std::filesystem::copy_file(saved_root / "old_meta.bin", storage_root / "meta.bin",
+                                 std::filesystem::copy_options::overwrite_existing, ec);
+      ASSERT_FALSE(ec) << ec.message();
+
+      PersistentRaftState loaded_old_boundary;
+      bool has_state = false;
+      ASSERT_TRUE(storage->Load(&loaded_old_boundary, &has_state, &error)) << error;
+      ASSERT_TRUE(has_state);
+      ASSERT_EQ(loaded_old_boundary.log.size(), old_state.log.size());
+      EXPECT_EQ(loaded_old_boundary.commit_index, old_state.commit_index);
+      EXPECT_EQ(loaded_old_boundary.last_applied, old_state.last_applied);
+      EXPECT_EQ(loaded_old_boundary.log.back().index, old_state.log.back().index);
+      EXPECT_EQ(loaded_old_boundary.log.back().command, old_state.log.back().command);
+
+      // Simulate the inverse torn publish: new meta.bin points past old log/.
+      // This is not a trusted state and must fail boundary validation.
+      std::filesystem::remove_all(storage_root / "log", ec);
+      ASSERT_FALSE(ec) << ec.message();
+      std::filesystem::copy(saved_root / "old_log", storage_root / "log",
+                            std::filesystem::copy_options::recursive |
+                                std::filesystem::copy_options::overwrite_existing,
+                            ec);
+      ASSERT_FALSE(ec) << ec.message();
+      std::filesystem::copy_file(saved_root / "new_meta.bin", storage_root / "meta.bin",
+                                 std::filesystem::copy_options::overwrite_existing, ec);
+      ASSERT_FALSE(ec) << ec.message();
+
+      PersistentRaftState rejected;
+      has_state = false;
+      ASSERT_FALSE(storage->Load(&rejected, &has_state, &error));
+      EXPECT_FALSE(has_state);
+      EXPECT_NE(error.find("log count mismatch"), std::string::npos) << error;
+    }
+
+    TEST_F(RaftSegmentStorageTest, MissingFirstSegmentFailsBeforeTrustingPublishedBoundary)
+    {
+      const auto storage_root = data_root_ / "direct_storage_missing_first_segment_boundary";
+      auto storage = CreateFileRaftStorage(storage_root.string());
+      const auto state = MakeState(1, 700);
+      std::string error;
+
+      ASSERT_TRUE(storage->Save(state, &error)) << error;
+
+      const auto segment_files = ListFilesWithExtension(storage_root / "log", ".log");
+      ASSERT_GE(segment_files.size(), 2U) << DescribeDirectoryTree(root_);
+      ASSERT_TRUE(std::filesystem::remove(segment_files.front())) << DescribeDirectoryTree(root_);
+
+      PersistentRaftState loaded;
+      bool has_state = true;
+      ASSERT_FALSE(storage->Load(&loaded, &has_state, &error));
+      EXPECT_FALSE(has_state);
+      EXPECT_FALSE(error.empty());
+    }
+
+    TEST_F(RaftSegmentStorageTest, FinalSegmentTailTruncateKeepsTrustedLogPrefixAndClampsCommitApply)
+    {
+      const auto storage_root = data_root_ / "direct_storage_final_segment_trusted_prefix";
+      auto storage = CreateFileRaftStorage(storage_root.string());
+      const auto state = MakeState(1, 513);
+      std::string error;
+
+      ASSERT_TRUE(storage->Save(state, &error)) << error;
+
+      const auto segment_files = ListFilesWithExtension(storage_root / "log", ".log");
+      ASSERT_EQ(segment_files.size(), 2U) << DescribeDirectoryTree(root_);
+      const auto final_segment = segment_files.back();
+
+      std::error_code ec;
+      const auto original_size = std::filesystem::file_size(final_segment, ec);
+      ASSERT_FALSE(ec) << ec.message();
+      ASSERT_GT(original_size, 1U) << final_segment.string();
+
+      std::filesystem::resize_file(final_segment, original_size - 1, ec);
+      ASSERT_FALSE(ec) << ec.message();
+
+      PersistentRaftState loaded;
+      bool has_state = false;
+      ASSERT_TRUE(storage->Load(&loaded, &has_state, &error)) << error;
+      ASSERT_TRUE(has_state);
+      ASSERT_EQ(loaded.log.size(), 512U) << DescribeDirectoryTree(root_);
+      EXPECT_EQ(loaded.log.back().index, 512U);
+      EXPECT_EQ(loaded.commit_index, 512U);
+      EXPECT_EQ(loaded.last_applied, 512U);
+      EXPECT_EQ(loaded.log.back().command, state.log[511].command);
+    }
+
+    TEST_F(RaftSegmentStorageTest, LogDirectoryReplaceFailureNeedsExactFailureInjectionSeam)
+    {
+      const auto storage_root = data_root_ / "direct_storage_log_replace_injection_contract";
+      const auto saved_root = root_ / "saved_log_replace_states";
+      auto storage = CreateFileRaftStorage(storage_root.string());
+      const auto old_state = MakeState(1, 16);
+      const auto new_state = MakeState(1, 32);
+      const std::string trusted_state_expectation =
+          "restart must keep the previously durable segment set and must not trust a partially published newer log boundary when replacing log/ fails";
+      std::string error;
+
+      ASSERT_TRUE(storage->Save(old_state, &error)) << error;
+
+      std::error_code ec;
+      std::filesystem::create_directories(saved_root, ec);
+      ASSERT_FALSE(ec) << ec.message();
+      std::filesystem::copy(storage_root / "log", saved_root / "old_log",
+                            std::filesystem::copy_options::recursive |
+                                std::filesystem::copy_options::overwrite_existing,
+                            ec);
+      ASSERT_FALSE(ec) << ec.message();
+
+      {
+        ScopedEnvVar failpoint("RAFT_TEST_STORAGE_FAILPOINT", "log_directory_replace");
+        ASSERT_FALSE(storage->Save(new_state, &error));
+      }
+      ExpectInjectedFailure(error,
+                            "log directory replace",
+                            storage_root / "log",
+                            "replace/rename",
+                            trusted_state_expectation,
+                            "error should identify that replacing log/ failed before the newer segment tree became the trusted published boundary");
+
+      std::filesystem::remove_all(storage_root / "log", ec);
+      ec.clear();
+      std::filesystem::copy(saved_root / "old_log", storage_root / "log",
+                            std::filesystem::copy_options::recursive |
+                                std::filesystem::copy_options::overwrite_existing,
+                            ec);
+      ASSERT_FALSE(ec) << ec.message();
+
+      PersistentRaftState loaded;
+      bool has_state = false;
+      ASSERT_TRUE(storage->Load(&loaded, &has_state, &error)) << error;
+      ASSERT_TRUE(has_state);
+      ExpectLoadedStateMatches(loaded, old_state);
+    }
+
+    TEST_F(RaftSegmentStorageTest, LogDirectorySyncFailureNeedsExactFailureInjectionSeam)
+    {
+      const auto storage_root = data_root_ / "direct_storage_log_directory_sync_injection_contract";
+      const auto saved_root = root_ / "saved_log_directory_sync_states";
+      auto storage = CreateFileRaftStorage(storage_root.string());
+      const auto old_state = MakeState(1, 16);
+      const auto new_state = MakeState(1, 32);
+      const std::string trusted_state_expectation =
+          "restart must stay bounded by the last fully durable segment publish if the new log tree becomes visible but the parent directory sync does not complete";
+      std::string error;
+
+      ASSERT_TRUE(storage->Save(old_state, &error)) << error;
+
+      std::error_code ec;
+      std::filesystem::create_directories(saved_root, ec);
+      ASSERT_FALSE(ec) << ec.message();
+      std::filesystem::copy(storage_root / "log", saved_root / "old_log",
+                            std::filesystem::copy_options::recursive |
+                                std::filesystem::copy_options::overwrite_existing,
+                            ec);
+      ASSERT_FALSE(ec) << ec.message();
+
+      {
+        ScopedEnvVar failpoint("RAFT_TEST_STORAGE_FAILPOINT", "log_directory_sync");
+        ASSERT_FALSE(storage->Save(new_state, &error));
+      }
+      ExpectInjectedFailure(error,
+                            "log parent directory sync after publish",
+                            storage_root,
+                            "directory sync",
+                            trusted_state_expectation,
+                            "error should identify that the parent directory sync boundary failed after the newer log tree became visible");
+
+      std::filesystem::remove_all(storage_root / "log", ec);
+      ec.clear();
+      std::filesystem::copy(saved_root / "old_log", storage_root / "log",
+                            std::filesystem::copy_options::recursive |
+                                std::filesystem::copy_options::overwrite_existing,
+                            ec);
+      ASSERT_FALSE(ec) << ec.message();
+
+      PersistentRaftState loaded;
+      bool has_state = false;
+      ASSERT_TRUE(storage->Load(&loaded, &has_state, &error)) << error;
+      ASSERT_TRUE(has_state);
+      ExpectLoadedStateMatches(loaded, old_state);
+    }
+
+    TEST_F(RaftSegmentStorageTest, FinalSegmentPartialWriteNeedsExactFailureInjectionSeam)
+    {
+      const auto storage_root = data_root_ / "direct_storage_partial_write_injection_contract";
+      auto storage = CreateFileRaftStorage(storage_root.string());
+      const auto old_state = MakeState(1, 16);
+      const auto new_state = MakeState(1, 900);
+      const std::string trusted_state_expectation =
+          "save must fail before publishing the new log directory, so restart stays on the previously durable log boundary and ignores the partially written temp segment";
+      std::string error;
+
+      ASSERT_TRUE(storage->Save(old_state, &error)) << error;
+
+      {
+        ScopedEnvVar failpoint("RAFT_TEST_STORAGE_FAILPOINT", "final_segment_partial_write");
+        ASSERT_FALSE(storage->Save(new_state, &error));
+      }
+      ExpectInjectedFailure(error,
+                            "final segment partial write during save",
+                            storage_root / "log.tmp" / "segment_00000000000000000513.log",
+                            "partial write",
+                            trusted_state_expectation,
+                            "error should identify that the final temp segment write stopped at a partial-record boundary and that recovery must reject the untrusted tail");
+
+      PersistentRaftState loaded;
+      bool has_state = false;
+      ASSERT_TRUE(storage->Load(&loaded, &has_state, &error)) << error;
+      ASSERT_TRUE(has_state);
+      ExpectLoadedStateMatches(loaded, old_state);
+    }
+
+    TEST_F(RaftSegmentStorageTest, MissingMetaFileCausesLoadToReportNoPersistedState)
+    {
+      const auto storage_root = data_root_ / "direct_storage_missing_meta";
+      auto storage = CreateFileRaftStorage(storage_root.string());
+      std::string error;
+
+      ASSERT_TRUE(storage->Save(MakeState(1, 256), &error)) << error;
+      ASSERT_TRUE(std::filesystem::remove(storage_root / "meta.bin")) << DescribeDirectoryTree(root_);
+
+      PersistentRaftState loaded;
+      bool has_state = true;
+      ASSERT_TRUE(storage->Load(&loaded, &has_state, &error)) << error;
+      EXPECT_FALSE(has_state);
+      EXPECT_TRUE(loaded.log.empty());
+      EXPECT_EQ(loaded.current_term, 0U);
+      EXPECT_EQ(loaded.voted_for, -1);
+      EXPECT_EQ(loaded.commit_index, 0U);
+      EXPECT_EQ(loaded.last_applied, 0U);
+    }
+
+    TEST_F(RaftSegmentStorageTest, CorruptedMetaFileFailsLoad)
+    {
+      const auto storage_root = data_root_ / "direct_storage_corrupted_meta";
+      auto storage = CreateFileRaftStorage(storage_root.string());
+      std::string error;
+
+      ASSERT_TRUE(storage->Save(MakeState(1, 256), &error)) << error;
+
+      const auto meta_path = storage_root / "meta.bin";
+      {
+        std::fstream io(meta_path, std::ios::binary | std::ios::in | std::ios::out);
+        ASSERT_TRUE(io.is_open()) << meta_path.string();
+        const unsigned char bad_magic = 0x00;
+        io.write(reinterpret_cast<const char *>(&bad_magic), sizeof(bad_magic));
+        ASSERT_TRUE(static_cast<bool>(io)) << "failed to corrupt meta file";
+      }
+
+      PersistentRaftState loaded;
+      bool has_state = false;
+      ASSERT_FALSE(storage->Load(&loaded, &has_state, &error));
+      EXPECT_FALSE(has_state);
+      EXPECT_NE(error.find("invalid raft meta magic"), std::string::npos) << error;
+    }
+
+    TEST_F(RaftSegmentStorageTest, UnsupportedMetaVersionFailsLoadWithPathAndVersion)
+    {
+      const auto storage_root = data_root_ / "direct_storage_unsupported_meta_version";
+      auto storage = CreateFileRaftStorage(storage_root.string());
+      std::string error;
+
+      ASSERT_TRUE(storage->Save(MakeState(1, 16), &error)) << error;
+
+      const auto meta_path = storage_root / "meta.bin";
+      constexpr std::streamoff kMetaVersionOffset = sizeof(std::uint32_t);
+      OverwriteBinaryField<std::uint32_t>(meta_path, kMetaVersionOffset, 99U);
+
+      PersistentRaftState loaded;
+      bool has_state = false;
+      ASSERT_FALSE(storage->Load(&loaded, &has_state, &error));
+      EXPECT_FALSE(has_state);
+      EXPECT_NE(error.find("unsupported raft meta version"), std::string::npos) << error;
+      EXPECT_NE(error.find(meta_path.string()), std::string::npos) << error;
+      EXPECT_NE(error.find("version=99"), std::string::npos) << error;
+    }
+
+    TEST_F(RaftSegmentStorageTest, InconsistentMetaLogBoundaryFailsBeforeTrustingSegments)
+    {
+      const auto storage_root = data_root_ / "direct_storage_bad_meta_boundary";
+      auto storage = CreateFileRaftStorage(storage_root.string());
+      std::string error;
+
+      ASSERT_TRUE(storage->Save(MakeState(1, 16), &error)) << error;
+
+      const auto meta_path = storage_root / "meta.bin";
+      constexpr std::streamoff kLogCountOffset =
+          sizeof(std::uint32_t) + sizeof(std::uint32_t) + sizeof(std::uint64_t) +
+          sizeof(std::int64_t) + sizeof(std::uint64_t) + sizeof(std::uint64_t) +
+          sizeof(std::uint64_t) + sizeof(std::uint64_t);
+      OverwriteBinaryField<std::uint64_t>(meta_path, kLogCountOffset, 99U);
+
+      PersistentRaftState loaded;
+      bool has_state = false;
+      ASSERT_FALSE(storage->Load(&loaded, &has_state, &error));
+      EXPECT_FALSE(has_state);
+      EXPECT_NE(error.find("meta log boundary invariant failed"), std::string::npos) << error;
+      EXPECT_NE(error.find("log_count=99"), std::string::npos) << error;
+      EXPECT_NE(error.find(meta_path.string()), std::string::npos) << error;
+    }
+
+    TEST_F(RaftSegmentStorageTest, CorruptedEarlierSegmentTailCleansLaterSegmentsAndReportsDiagnostics)
+    {
+      const auto storage_root = data_root_ / "direct_storage_tail_truncate_cleanup";
+      auto storage = CreateFileRaftStorage(storage_root.string());
+      auto state = MakeState(1, 900);
+
+      std::string error;
+      ASSERT_TRUE(storage->Save(state, &error)) << error;
+
+      const auto segment_files = ListFilesWithExtension(storage_root / "log", ".log");
+      ASSERT_GE(segment_files.size(), 2U) << DescribeDirectoryTree(root_);
+      const auto first_segment = segment_files.front();
+      const auto later_segment = segment_files.back();
+
+      {
+        std::ofstream out(first_segment, std::ios::binary | std::ios::app);
+        ASSERT_TRUE(out.is_open()) << first_segment.string();
+        const std::string junk = "corrupted-earlier-segment-tail";
+        out.write(junk.data(), static_cast<std::streamsize>(junk.size()));
+        out.flush();
+        ASSERT_TRUE(out) << "failed to append corruption to " << first_segment.string();
+      }
+
+      PersistentRaftState loaded;
+      bool has_state = false;
+      ASSERT_FALSE(storage->Load(&loaded, &has_state, &error));
+      EXPECT_FALSE(has_state);
+      EXPECT_NE(error.find("segment tail truncated"), std::string::npos) << error;
+      EXPECT_NE(error.find(first_segment.filename().string()), std::string::npos) << error;
+      EXPECT_NE(error.find("removed_later_segment"), std::string::npos) << error;
+      EXPECT_FALSE(std::filesystem::exists(later_segment)) << DescribeDirectoryTree(root_);
     }
 
     TEST_F(RaftSegmentStorageTest, RaftClusterGeneratesManySnapshotsAndSegmentLogsUnderBuildDirectory)

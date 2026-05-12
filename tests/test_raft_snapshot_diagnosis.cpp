@@ -1,9 +1,12 @@
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <chrono>
 #include <cstdlib>
 #include <filesystem>
 #include <functional>
+#include <fstream>
+#include <iomanip>
 #include <iostream>
 #include <memory>
 #include <optional>
@@ -13,10 +16,10 @@
 #include <thread>
 #include <vector>
 
-#include "raft/command.h"
-#include "raft/config.h"
-#include "raft/propose.h"
-#include "raft/raft_node.h"
+#include "raft/common/command.h"
+#include "raft/common/config.h"
+#include "raft/common/propose.h"
+#include "raft/node/raft_node.h"
 
 namespace raftdemo {
 namespace {
@@ -106,6 +109,72 @@ std::filesystem::path MakeTestRoot(const std::string& test_name) {
   }
 
   return base_dir / name;
+}
+
+void WriteTextFile(const std::filesystem::path& path, const std::string& content) {
+  std::filesystem::create_directories(path.parent_path());
+  std::ofstream out(path, std::ios::binary | std::ios::trunc);
+  ASSERT_TRUE(out.is_open()) << path.string();
+  out << content;
+  out.flush();
+  ASSERT_TRUE(static_cast<bool>(out)) << path.string();
+}
+
+void CopyDirectoryRecursively(const std::filesystem::path& from,
+                              const std::filesystem::path& to) {
+  std::error_code ec;
+  std::filesystem::create_directories(to.parent_path(), ec);
+  ASSERT_FALSE(ec) << ec.message();
+  std::filesystem::copy(from,
+                        to,
+                        std::filesystem::copy_options::recursive |
+                            std::filesystem::copy_options::overwrite_existing,
+                        ec);
+  ASSERT_FALSE(ec) << "copy snapshot directory failed: from=" << from.string()
+                   << ", to=" << to.string() << ", error=" << ec.message();
+}
+
+std::string FormatSnapshotIndex(std::uint64_t index) {
+  std::ostringstream oss;
+  oss << std::setw(20) << std::setfill('0') << index;
+  return oss.str();
+}
+
+std::vector<std::filesystem::path> ListSnapshotDirs(const std::filesystem::path& snapshot_root) {
+  std::vector<std::filesystem::path> dirs;
+  std::error_code ec;
+  if (!std::filesystem::exists(snapshot_root, ec)) {
+    return dirs;
+  }
+
+  for (const auto& entry : std::filesystem::directory_iterator(snapshot_root, ec)) {
+    if (ec) {
+      break;
+    }
+    if (!entry.is_directory()) {
+      continue;
+    }
+    const std::string name = entry.path().filename().string();
+    if (name.rfind("snapshot_", 0) == 0) {
+      dirs.push_back(entry.path());
+    }
+  }
+
+  std::sort(dirs.begin(), dirs.end());
+  return dirs;
+}
+
+std::optional<std::uint64_t> SnapshotIndexFromDir(const std::filesystem::path& snapshot_dir) {
+  const std::string name = snapshot_dir.filename().string();
+  constexpr std::size_t kPrefixSize = 9;  // "snapshot_"
+  if (name.size() <= kPrefixSize || name.rfind("snapshot_", 0) != 0) {
+    return std::nullopt;
+  }
+  try {
+    return static_cast<std::uint64_t>(std::stoull(name.substr(kPrefixSize)));
+  } catch (...) {
+    return std::nullopt;
+  }
 }
 
 std::optional<std::uint64_t> ExtractUintField(const std::string& describe,
@@ -637,6 +706,128 @@ TEST_F(RaftSnapshotDiagnosisTest, CompactedClusterReplicatesNewLogAfterRestarted
       << "replication catch-up path: next_index initialization, compacted-log boundary, "
       << "AppendEntries prev_log_index/term, or InstallSnapshot handoff.\n"
       << DescribeValueOnAllNodes(cluster.Nodes(), "diagnosis_after_restart");
+}
+
+TEST_F(RaftSnapshotDiagnosisTest,
+       RestartedSingleNodeReplaysAppliedTailAfterRejectingCorruptedNewestSnapshot) {
+  constexpr std::uint64_t kSnapshotThreshold = 20;
+  const std::string case_name = "diagnosis_replay_after_corrupted_snapshot";
+  auto cluster = MakeCluster(case_name, true, kSnapshotThreshold);
+  cluster.Start();
+
+  auto leader = WaitForSingleLeader(cluster.Nodes(), std::chrono::seconds(8));
+  ASSERT_NE(leader, nullptr) << "no leader elected\n" << DescribeAllNodes(cluster.Nodes());
+
+  WriteManyValues(cluster.Nodes(), "corrupted_fallback", 45);
+
+  leader = WaitForSingleLeader(cluster.Nodes(), std::chrono::seconds(8));
+  ASSERT_NE(leader, nullptr) << "no leader after baseline writes\n"
+                             << DescribeAllNodes(cluster.Nodes());
+  const std::size_t leader_index = FindNodeIndex(cluster.Nodes(), leader);
+  ASSERT_LT(leader_index, cluster.Nodes().size()) << "failed to locate leader";
+
+  ASSERT_TRUE(WaitForNodeFieldAtLeast(cluster.Nodes()[leader_index],
+                                      "last_snapshot_index",
+                                      40,
+                                      std::chrono::seconds(20)))
+      << "target node did not create enough snapshots before corrupt-latest restart test\n"
+      << DescribeAllNodes(cluster.Nodes());
+
+  cluster.StopAll();
+
+  const std::filesystem::path node_snapshot_root =
+      snapshot_root_ / case_name / ("node_" + std::to_string(leader_index + 1));
+  const auto snapshot_dirs = ListSnapshotDirs(node_snapshot_root);
+  ASSERT_GE(snapshot_dirs.size(), 2U) << "need at least two published snapshots under "
+                                      << node_snapshot_root.string();
+
+  const auto older_snapshot_index = SnapshotIndexFromDir(snapshot_dirs[snapshot_dirs.size() - 2]);
+  const auto latest_snapshot_index = SnapshotIndexFromDir(snapshot_dirs.back());
+  ASSERT_TRUE(older_snapshot_index.has_value());
+  ASSERT_TRUE(latest_snapshot_index.has_value());
+  ASSERT_GT(*latest_snapshot_index, *older_snapshot_index);
+
+  WriteTextFile(snapshot_dirs.back() / "data.bin", "corrupted-newest-snapshot-data");
+
+  cluster.StartOnly(leader_index);
+
+  ASSERT_TRUE(WaitForValueOnNode(cluster.Nodes()[leader_index],
+                                 "corrupted_fallback_44",
+                                 "value_44",
+                                 std::chrono::seconds(5)))
+      << "restart did not replay committed log entries after rejecting the corrupted newest "
+         "snapshot. Suspect trusted snapshot fallback or startup log replay.\n"
+      << DescribeValueOnAllNodes(cluster.Nodes(), "corrupted_fallback_44");
+
+  const auto restored_snapshot_index =
+      ExtractUintField(cluster.Nodes()[leader_index]->Describe(), "last_snapshot_index");
+  ASSERT_TRUE(restored_snapshot_index.has_value())
+      << cluster.Nodes()[leader_index]->Describe();
+  EXPECT_GE(*restored_snapshot_index, *older_snapshot_index);
+  EXPECT_LE(*restored_snapshot_index, *latest_snapshot_index)
+      << "restart should not advance beyond the highest previously published snapshot boundary "
+         "while replaying committed logs after rejecting a corrupted newest snapshot";
+}
+
+TEST_F(RaftSnapshotDiagnosisTest,
+       RestartedSingleNodeSkipsMetadataMismatchedVisibleSnapshotAndReplaysCommittedTail) {
+  constexpr std::uint64_t kSnapshotThreshold = 12;
+  const std::string case_name = "diagnosis_replay_after_metadata_mismatch";
+  auto cluster = MakeCluster(case_name, true, kSnapshotThreshold);
+  cluster.Start();
+
+  auto leader = WaitForSingleLeader(cluster.Nodes(), std::chrono::seconds(8));
+  ASSERT_NE(leader, nullptr) << "no leader elected\n" << DescribeAllNodes(cluster.Nodes());
+
+  WriteManyValues(cluster.Nodes(), "metadata_replay", 30);
+
+  leader = WaitForSingleLeader(cluster.Nodes(), std::chrono::seconds(8));
+  ASSERT_NE(leader, nullptr) << "no leader after metadata replay writes\n"
+                             << DescribeAllNodes(cluster.Nodes());
+  const std::size_t leader_index = FindNodeIndex(cluster.Nodes(), leader);
+  ASSERT_LT(leader_index, cluster.Nodes().size()) << "failed to locate leader";
+
+  ASSERT_TRUE(WaitForNodeFieldAtLeast(cluster.Nodes()[leader_index],
+                                      "last_snapshot_index",
+                                      24,
+                                      std::chrono::seconds(20)))
+      << "target node did not create enough snapshots before metadata mismatch restart test\n"
+      << DescribeAllNodes(cluster.Nodes());
+
+  cluster.StopAll();
+
+  const std::filesystem::path node_snapshot_root =
+      snapshot_root_ / case_name / ("node_" + std::to_string(leader_index + 1));
+  const auto snapshot_dirs = ListSnapshotDirs(node_snapshot_root);
+  ASSERT_GE(snapshot_dirs.size(), 2U) << "need at least two published snapshots under "
+                                      << node_snapshot_root.string();
+
+  const auto latest_snapshot_index = SnapshotIndexFromDir(snapshot_dirs.back());
+  ASSERT_TRUE(latest_snapshot_index.has_value()) << snapshot_dirs.back().string();
+  const std::uint64_t mismatched_visible_index = *latest_snapshot_index + kSnapshotThreshold;
+  const std::filesystem::path mismatched_visible_dir =
+      node_snapshot_root / ("snapshot_" + FormatSnapshotIndex(mismatched_visible_index));
+  CopyDirectoryRecursively(snapshot_dirs.back(), mismatched_visible_dir);
+
+  cluster.StartOnly(leader_index);
+
+  ASSERT_TRUE(WaitForValueOnNode(cluster.Nodes()[leader_index],
+                                 "metadata_replay_29",
+                                 "value_29",
+                                 std::chrono::seconds(5)))
+      << "restart did not replay committed log tail after skipping metadata-mismatched visible "
+         "snapshot. Suspect trusted snapshot selection or startup replay.\n"
+      << DescribeValueOnAllNodes(cluster.Nodes(), "metadata_replay_29");
+
+  const auto restored_snapshot_index =
+      ExtractUintField(cluster.Nodes()[leader_index]->Describe(), "last_snapshot_index");
+  ASSERT_TRUE(restored_snapshot_index.has_value())
+      << cluster.Nodes()[leader_index]->Describe();
+  EXPECT_EQ(*restored_snapshot_index, *latest_snapshot_index)
+      << "restart should keep the real trusted snapshot boundary when a higher-index visible "
+         "snapshot directory has mismatched metadata";
+  EXPECT_LT(*restored_snapshot_index, mismatched_visible_index)
+      << cluster.Nodes()[leader_index]->Describe();
 }
 
 }  // namespace

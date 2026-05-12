@@ -1,6 +1,6 @@
 #include <gtest/gtest.h>
 
-#include "raft/command.h"
+#include "raft/common/command.h"
 
 namespace raftdemo {
 namespace {

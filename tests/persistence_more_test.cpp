@@ -7,11 +7,11 @@
 #include <thread>
 #include <vector>
 
-#include "raft/command.h"
-#include "raft/config.h"
-#include "raft/logging.h"
-#include "raft/propose.h"
-#include "raft/raft_node.h"
+#include "raft/common/command.h"
+#include "raft/common/config.h"
+#include "raft/runtime/logging.h"
+#include "raft/common/propose.h"
+#include "raft/node/raft_node.h"
 
 namespace raftdemo {
 namespace {

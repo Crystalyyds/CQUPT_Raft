@@ -6,7 +6,7 @@
 #include <mutex>
 #include <thread>
 
-#include "raft/thread_pool.h"
+#include "raft/runtime/thread_pool.h"
 
 namespace raftdemo {
 namespace {

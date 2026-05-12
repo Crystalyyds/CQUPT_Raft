@@ -1,29 +1,77 @@
-# CQUPT_Raft 项目说明
+# CQUPT_Raft
 
-这是一个基于 C++20、gRPC、Protobuf、GoogleTest 的 Raft KV 存储内核项目。
+一句话说明：这是一个基于 C++20、gRPC、Protobuf、GoogleTest 的 Raft KV 内核项目，重点在一致性内核、持久化、快照、追赶和重启恢复。
 
-当前重点是 Raft 内核：选举、日志复制、提交应用、持久化、快照、落后节点追赶和重启恢复。暂时还不是完整的对外 KV 服务或分布式存储系统。
+## Language Rules
 
-禁止读.gitignore文件下面的文件夹里面的任何文件
+- 默认使用中文进行分析、规划、任务拆分、执行总结和测试结果说明。
+- Spec Kit 生成的 spec.md、plan.md、tasks.md、validation-matrix.md 等自然语言文档优先使用中文。
+- 代码标识符、文件名、目录名、类名、函数名、测试名、CMake target 名称保持英文。
+- 命令行、CMake、bash、PowerShell、C++ 代码块保持原样。
+- 技术术语允许中英混合，例如 Raft、leader election、AppendEntries、snapshot、follower catch-up、crash recovery、failure injection。
 
-## 主要目录
+## 全局规则
 
-```text
-include/raft/   头文件和核心接口
-src/            主要实现代码
-proto/          Raft RPC 协议
-tests/          GoogleTest 测试
-config.txt      示例节点配置
-test.sh         测试脚本
-```
+- 平台相关的 durability 代码不允许静默降级。
+- 如果一个平台实现了真实持久化语义，其他平台分支必须提供等价行为、返回明确错误，或在 durability contract 中明确记录较弱保证。
+- 对 required durability operations，不允许使用 no-op 后直接返回成功的实现。
+- 按 AGENTS.md 执行。测试日志不要全文输出。通过只报 PASS；失败只报失败摘要、关键断言、失败分类、最后 50 行日志和完整日志文件路径。
 
-运行或测试会产生 `raft_data/`、`raft_snapshots/`、`build/tests/raft_test_data/` 等数据目录，不要当作源码修改。
+## C++ 头文件 / 源文件规则
 
+- `.h` 只写接口、类型、结构体、枚举、常量、必要注释和轻量 inline。
+- `.cpp` 写具体实现、复杂逻辑、文件 IO、RPC 处理、持久化流程、平台相关代码和内部 helper。
+- 默认优先改 `.cpp`；只有接口、类型、函数签名或契约变化时才改 `.h`。
+- 修改 `.h` 必须说明原因和影响范围。
+- 不要把复杂业务逻辑、Raft 状态转换、持久化 publish 流程、平台系统调用写进 `.h`。
+- 内部 helper 优先放在 `.cpp` 的匿名 namespace 中。
 
+## 使用规则
 
-## 构建
+- 先读根 `AGENTS.md`。
+- 再根据模块索引进入目标模块目录的 `AGENTS.md`。
+- 再读取该模块源码与相关测试。
+- 不要默认扫描整个仓库。
 
-推荐低并发构建，避免占满 CPU/内存：
+## 模块索引
+
+- `modules/raft/common`
+  - 共享配置、提案结果、命令编解码
+- `modules/raft/runtime`
+  - 日志、定时器、线程池
+- `modules/raft/service`
+  - gRPC Raft/KV 服务适配层
+- `modules/raft/node`
+  - `RaftNode` 核心状态与调度
+- `modules/raft/replication`
+  - 单 follower 复制状态机
+- `modules/raft/storage`
+  - Raft 硬状态、segment log、snapshot catalog 持久化
+- `modules/raft/state_machine`
+  - KV 状态机与状态机快照格式
+- `proto`
+  - RPC/Protobuf 契约层
+- `apps`
+  - 节点入口与 CLI 客户端入口
+
+## 全局硬规则
+
+- 禁止读取 `.gitignore` 文件下面的文件夹里的任何文件。
+- 禁止读取：
+  - `vcpkg-configuration.json`
+  - `CQUPT_Raft_AI_Context.md`
+  - `README.md`
+  - `/deploy`
+- 不允许修改业务逻辑。
+- 不允许修改协议语义。
+- 不允许修改持久化格式。
+- 不允许修改公共 API 行为。
+- 不允许修改类名、函数名、命名空间。
+- 不允许删除测试。
+- 不允许跳过失败测试。
+- 不允许为了通过编译而顺手改业务行为。
+
+## 构建命令
 
 ```bash
 cmake --preset debug-ninja-low-parallel
@@ -37,89 +85,103 @@ cmake --preset debug-ninja-safe
 cmake --build --preset debug-ninja-safe
 ```
 
-## 测试
-
-推荐使用：
+## 测试命令
 
 ```bash
 ./test.sh
-```
-
-常用：
-
-```bash
 ./test.sh --group unit
 ./test.sh --group persistence
 ./test.sh --group all
 ./test.sh --keep-data
 ```
 
-测试并发建议保持低，例如 `CTEST_PARALLEL_LEVEL=1`。
-
-## 启动示例
+建议保持低并发，例如：
 
 ```bash
-./build/raft_demo ./config.txt 1
-./build/raft_demo ./config.txt 2
-./build/raft_demo ./config.txt 3
+CTEST_PARALLEL_LEVEL=1 ./test.sh --group all
 ```
 
-如果 `config.txt` 只配置 `node.1`，就是单节点集群；配置多个 `node.<id>` 就是多节点集群。
-
-## 项目流程
-
-大致运行流程：
-
-```text
-读取配置
-  -> 创建 RaftNode
-  -> 加载持久化状态和 snapshot
-  -> 启动 gRPC 服务、定时器、RPC 线程池
-  -> 选举产生 leader
-  -> client 调用 Propose 提交命令
-  -> leader 写入本地日志
-  -> leader 通过 AppendEntries 复制到 follower
-  -> 多数派复制成功后推进 commit_index
-  -> 已提交日志应用到 KvStateMachine
-  -> 达到阈值后生成 snapshot 并压缩旧日志
+## Test Log Output Rules
+- 不要把完整测试日志粘贴到聊天里。
+- 测试日志应保存到本地文件，例如 `tmp/test-logs/`。
+- 测试通过时，只输出：
+  - 测试命令
+  - PASS
+  - 总耗时
+- 测试失败时，只输出：
+  - 失败测试名
+  - 关键断言
+  - 失败分类
+  - 最后 50 行日志
+  - 本地完整日志文件路径
+- 不要输出完整 Raft 节点日志，除非用户明确要求。
+- 优先使用 `tail -n 50`、`grep -E`、`rg` 提取关键失败信息。
+- 不要为了展示日志而重复运行测试。
 ```
 
-重启恢复流程：
+## Include 规则
 
-```text
-读取 meta.bin 和 segment log
-  -> 加载最新有效 snapshot
-  -> replay snapshot 之后的 committed log
-  -> 恢复 KV 状态机
-  -> 重新参与选举和复制
-```
+- 项目源码和测试统一从 `modules/` 作为 include 根目录。
+- 头文件按模块引用：
+  - `raft/common/...`
+  - `raft/runtime/...`
+  - `raft/service/...`
+  - `raft/node/...`
+  - `raft/replication/...`
+  - `raft/storage/...`
+  - `raft/state_machine/...`
+- 生成的 protobuf/gRPC 头文件保持直接引用：
+  - `raft.pb.h`
+  - `raft.grpc.pb.h`
 
-落后 follower 追赶流程：
+## CMake 修改规则
 
-```text
-leader 维护每个 follower 的 next_index / match_index
-  -> 普通落后时批量发送 AppendEntries
-  -> 日志已经被 leader 压缩时发送 InstallSnapshot
-  -> snapshot 安装完成后继续复制后续日志
-```
+- 优先保持现有 target 名称不变：
+  - `raft_proto`
+  - `raft_core`
+  - `raft_demo`
+  - `raft_kv_client`
+- 只改路径、源文件列表、include 根目录和必要的构建脚本路径。
+- 不要因为目录调整而引入新的业务逻辑分支。
 
-## 核心文件
+## 跨模块修改规则
 
-- `src/main.cpp`：读取配置，启动一个 `RaftNode`。
-- `src/raft_node.cpp`：Raft 核心逻辑，包括选举、RPC 处理、提交、应用、快照和恢复。
-- `src/replicator.cpp`：每个 follower 的日志复制状态机。
-- `src/raft_storage.cpp`：Raft term、vote、commit index 和 segment log 持久化。
-- `src/snapshot_storage.cpp`：目录式 snapshot 保存、加载、校验和清理。
-- `src/state_machine.cpp`：内存 KV 状态机，支持 SET、DEL 和 snapshot。
-- `src/command.cpp`：命令序列化和反序列化。
-- `proto/raft.proto`：RequestVote、AppendEntries、InstallSnapshot RPC 定义。
+- 先定位主模块，再最小化波及范围。
+- 如果修改 `modules/raft/node`，通常要检查：
+  - `modules/raft/replication`
+  - `modules/raft/storage`
+  - `modules/raft/state_machine`
+  - 相关 Raft 测试
+- 如果修改 `proto` 或 `service`，必须同步检查契约使用方和测试。
 
-## 重要约定
+## 高风险区域
 
-- 不要轻易修改命令格式：`SET|key|value`、`DEL|key|`。
-- 尽量保持已有函数名、变量名和整体结构。
-- 优先使用 C++20 标准库，保持跨平台。
-- 测试使用 GoogleTest。
-- 测试数据放在 `build/tests/raft_test_data/`，不要放到 `/tmp`。
-- 修改 Raft 行为时，优先补充或更新对应测试。
-- 不要提交 build 产物、生成的 protobuf 文件、运行数据或 snapshot 数据。
+- `proto/`
+- `modules/raft/service`
+- `modules/raft/storage`
+- `modules/raft/node`
+- `modules/raft/replication`
+- snapshot/restart/catch-up 相关测试
+- 并发与 crash recovery 路径
+
+## 上下文节省规则
+
+- 不要默认扫描整个仓库。
+- 不要扫描NOTREAD.md文件里面标记的文件
+- 先读根 `AGENTS.md`，再读目标模块 `AGENTS.md`。
+- `.gitignore` 覆盖内容、构建产物、缓存、运行数据、日志、临时文件默认不读。
+- 运行测试产生的 `raft_data/`、`raft_snapshots/`、`build/tests/raft_test_data/` 不要当作源码分析。
+- 优先读：
+  - `project_understanding.md`
+  - `refactor_plan.md`
+  - 根 `CMakeLists.txt`
+  - `tests/CMakeLists.txt`
+  - `proto/raft.proto`
+  - 目标模块目录
+  - 与目标模块直接相关的测试文件
+
+<!-- SPECKIT START -->
+For additional context about technologies to be used, project structure,
+shell commands, and other important information, read
+`specs/004-raft-industrialization/plan.md`
+<!-- SPECKIT END -->

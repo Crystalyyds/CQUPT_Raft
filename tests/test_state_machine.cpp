@@ -2,8 +2,8 @@
 
 #include <string>
 
-#include "raft/command.h"
-#include "raft/state_machine.h"
+#include "raft/common/command.h"
+#include "raft/state_machine/state_machine.h"
 
 namespace raftdemo {
 namespace {
