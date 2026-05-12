@@ -122,7 +122,7 @@
   Basis: `specs/003-persistence-reliability/progress.md` Blocked T613-T616；`plan.md` W2/W3。
   Tests To Run: `./test.sh --group persistence`; `ctest --test-dir build --output-on-failure -R '^(PersistenceTest|RaftSegmentStorageTest)\.'`.
 
-- [ ] T007 [P] [US1] Add snapshot publish/prune failure cases in `tests/test_snapshot_storage_reliability.cpp` and `tests/test_raft_snapshot_restart.cpp`
+- [x] T007 [P] [US1] Add snapshot publish/prune failure cases in `tests/test_snapshot_storage_reliability.cpp` and `tests/test_raft_snapshot_restart.cpp`
   Goal: 先写 failure injection 测试，覆盖 snapshot publish、directory sync、prune/remove 与 restart 选择规则。
   Input: `tests/test_snapshot_storage_reliability.cpp`, `tests/test_raft_snapshot_restart.cpp`, `contracts/failure-injection-boundaries.md`, `validation-matrix.md`.
   Scope: 只改测试文件。
@@ -163,7 +163,7 @@
   Basis: `research.md` Decision 3；`plan.md` W2；`specs/003-persistence-reliability/progress.md` Blocked T613-T616。
   Tests To Run: T006 的新增用例；`./test.sh --group persistence`.
 
-- [ ] T010 [US1] Introduce the same opt-in seam for snapshot publish/prune in `modules/raft/storage/snapshot_storage.cpp`
+- [x] T010 [US1] Introduce the same opt-in seam for snapshot publish/prune in `modules/raft/storage/snapshot_storage.cpp`
   Goal: 覆盖 snapshot data/meta publish、directory sync 和 prune/remove 失败点。
   Input: `modules/raft/storage/snapshot_storage.cpp`, `contracts/failure-injection-boundaries.md`, T007.
   Scope: 仅改 `modules/raft/storage/snapshot_storage.cpp`；必要时复用 T009 的内部 helper。

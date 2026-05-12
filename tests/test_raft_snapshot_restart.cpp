@@ -1,9 +1,12 @@
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <chrono>
 #include <cstdlib>
 #include <filesystem>
 #include <functional>
+#include <fstream>
+#include <iomanip>
 #include <iostream>
 #include <memory>
 #include <optional>
@@ -17,11 +20,13 @@
 #include "raft/common/config.h"
 #include "raft/common/propose.h"
 #include "raft/node/raft_node.h"
+#include "raft/storage/snapshot_storage.h"
 
 namespace raftdemo {
 namespace {
 
 using Clock = std::chrono::steady_clock;
+constexpr const char* kSnapshotStorageFailpointEnv = "RAFT_TEST_SNAPSHOT_STORAGE_FAILPOINT";
 
 std::string ProposeStatusName(ProposeStatus status) {
   switch (status) {
@@ -125,6 +130,131 @@ std::filesystem::path MakeTestRoot(const std::string& test_name) {
                            std::to_string(NowForPath()) + "_" +
                            std::to_string(rd());
   return std::filesystem::temp_directory_path() / name;
+}
+
+void WriteTextFile(const std::filesystem::path& path, const std::string& content) {
+  std::filesystem::create_directories(path.parent_path());
+  std::ofstream out(path, std::ios::binary | std::ios::trunc);
+  ASSERT_TRUE(out.is_open()) << path.string();
+  out << content;
+  out.flush();
+  ASSERT_TRUE(static_cast<bool>(out)) << path.string();
+}
+
+void CopyFile(const std::filesystem::path& from, const std::filesystem::path& to) {
+  std::error_code ec;
+  std::filesystem::create_directories(to.parent_path(), ec);
+  ASSERT_FALSE(ec) << ec.message();
+  std::filesystem::copy_file(from, to, std::filesystem::copy_options::overwrite_existing, ec);
+  ASSERT_FALSE(ec) << "copy snapshot input failed: from=" << from.string()
+                   << ", to=" << to.string() << ", error=" << ec.message();
+}
+
+std::string JoinIssueReasons(const std::vector<SnapshotValidationIssue>& issues) {
+  std::ostringstream oss;
+  for (const auto& issue : issues) {
+    oss << issue.path << ": " << issue.reason << "\n";
+  }
+  return oss.str();
+}
+
+std::string FormatSnapshotIndex(std::uint64_t index) {
+  std::ostringstream oss;
+  oss << std::setw(20) << std::setfill('0') << index;
+  return oss.str();
+}
+
+std::string PendingT010Message(const std::string& operation,
+                               const std::filesystem::path& path,
+                               const std::string& trusted_state_expectation,
+                               const std::string& diagnostic_expectation) {
+  std::ostringstream oss;
+  oss << "TODO(T010): missing snapshot storage failure injection seam"
+      << ", operation=" << operation
+      << ", path=" << path.string()
+      << ", linux_specific=true"
+      << ", trusted_state_expectation=" << trusted_state_expectation
+      << ", diagnostic_expectation=" << diagnostic_expectation;
+  return oss.str();
+}
+
+void SetEnvVar(const char* name, const std::string& value) {
+#if defined(_WIN32)
+  ASSERT_EQ(_putenv_s(name, value.c_str()), 0) << name;
+#else
+  ASSERT_EQ(::setenv(name, value.c_str(), 1), 0) << name;
+#endif
+}
+
+void UnsetEnvVar(const char* name) {
+#if defined(_WIN32)
+  ASSERT_EQ(_putenv_s(name, ""), 0) << name;
+#else
+  ASSERT_EQ(::unsetenv(name), 0) << name;
+#endif
+}
+
+class ScopedEnvVar {
+ public:
+  ScopedEnvVar(const char* name, std::string value)
+      : name_(name) {
+    const char* current = std::getenv(name_);
+    if (current != nullptr) {
+      had_original_ = true;
+      original_value_ = current;
+    }
+    SetEnvVar(name_, value);
+  }
+
+  ~ScopedEnvVar() {
+    if (had_original_) {
+      SetEnvVar(name_, original_value_);
+    } else {
+      UnsetEnvVar(name_);
+    }
+  }
+
+ private:
+  const char* name_;
+  bool had_original_{false};
+  std::string original_value_;
+};
+
+std::vector<std::filesystem::path> ListSnapshotDirs(const std::filesystem::path& snapshot_root) {
+  std::vector<std::filesystem::path> dirs;
+  std::error_code ec;
+  if (!std::filesystem::exists(snapshot_root, ec)) {
+    return dirs;
+  }
+
+  for (const auto& entry : std::filesystem::directory_iterator(snapshot_root, ec)) {
+    if (ec) {
+      break;
+    }
+    if (!entry.is_directory()) {
+      continue;
+    }
+    const std::string name = entry.path().filename().string();
+    if (name.rfind("snapshot_", 0) == 0) {
+      dirs.push_back(entry.path());
+    }
+  }
+
+  std::sort(dirs.begin(), dirs.end());
+  return dirs;
+}
+
+std::optional<std::uint64_t> SnapshotIndexFromDir(const std::filesystem::path& snapshot_dir) {
+  const std::string name = snapshot_dir.filename().string();
+  constexpr std::size_t kPrefixSize = 9;  // "snapshot_"
+  if (name.size() <= kPrefixSize || name.rfind("snapshot_", 0) != 0) {
+    return std::nullopt;
+  }
+  try {
+    return static_cast<std::uint64_t>(std::stoull(name.substr(kPrefixSize)));
+  } catch (...) {
+    return std::nullopt;
+  }
 }
 
 std::optional<std::uint64_t> ExtractUintField(const std::string& describe,
@@ -715,6 +845,8 @@ class RaftSnapshotRestartTest : public ::testing::Test {
   int base_port_{0};
 };
 
+class RaftSnapshotRecoveryTest : public RaftSnapshotRestartTest {};
+
 TEST_F(RaftSnapshotRestartTest, FollowerKeepsStateAfterInstallSnapshotAndRestart) {
   auto cluster = MakeCluster("follower_snapshot_restart", true, 6);
   cluster.Start();
@@ -927,6 +1059,165 @@ TEST_F(RaftSnapshotRestartTest, SnapshotAndPostSnapshotLogsRecoverAfterFullResta
   ASSERT_TRUE(WaitForValueOnAll(cluster.Nodes(), "after_tail_restart", "ok",
                                 std::chrono::seconds(20)))
       << "cluster did not continue after restoring snapshot + tail logs";
+}
+
+TEST_F(RaftSnapshotRecoveryTest, StandaloneRestartFallsBackToOlderTrustedSnapshotWhenNewestSnapshotIsCorrupted) {
+  constexpr std::uint64_t kSnapshotThreshold = 4;
+  const std::string case_name = "restart_trusted_snapshot_fallback";
+  auto cluster = MakeCluster(case_name, true, kSnapshotThreshold);
+  cluster.Start();
+
+  auto stable_leader = WaitForStableLeader(cluster.Nodes(), std::chrono::seconds(8));
+  ASSERT_TRUE(stable_leader.has_value())
+      << "leader did not stabilize before snapshot fallback test, cluster="
+      << DescribeCluster(cluster.Nodes());
+
+  WriteManyValues(cluster.Nodes(), "restart_fallback", 48);
+
+  stable_leader = WaitForStableLeader(cluster.Nodes(), std::chrono::seconds(8));
+  ASSERT_TRUE(stable_leader.has_value())
+      << "leader did not stabilize after baseline writes, cluster="
+      << DescribeCluster(cluster.Nodes());
+  const std::size_t leader_index = stable_leader->leader_index;
+
+  ASSERT_TRUE(WaitForNodeFieldAtLeast(cluster.Nodes()[leader_index],
+                                      "last_snapshot_index", 8,
+                                      std::chrono::seconds(20)))
+      << "leader did not create snapshots before restart fallback test, describe="
+      << cluster.Nodes()[leader_index]->Describe();
+
+  cluster.StopAll();
+
+  const std::filesystem::path node_snapshot_root =
+      snapshot_root_ / case_name / ("node_" + std::to_string(leader_index + 1));
+  const auto snapshot_dirs = ListSnapshotDirs(node_snapshot_root);
+  ASSERT_GE(snapshot_dirs.size(), 2U) << "need at least two published snapshots under "
+                                      << node_snapshot_root.string();
+
+  const auto older_snapshot_dir = snapshot_dirs[snapshot_dirs.size() - 2];
+  const auto latest_snapshot_dir = snapshot_dirs.back();
+  const auto older_snapshot_index = SnapshotIndexFromDir(older_snapshot_dir);
+  const auto latest_snapshot_index = SnapshotIndexFromDir(latest_snapshot_dir);
+  ASSERT_TRUE(older_snapshot_index.has_value()) << older_snapshot_dir.string();
+  ASSERT_TRUE(latest_snapshot_index.has_value()) << latest_snapshot_dir.string();
+  ASSERT_GT(*latest_snapshot_index, *older_snapshot_index);
+
+  WriteTextFile(latest_snapshot_dir / "data.bin", "corrupted-newest-snapshot");
+
+  auto configs = BuildThreeNodeConfigs(data_root_ / case_name, base_port_);
+  auto snapshot_configs =
+      BuildThreeSnapshotConfigs(snapshot_root_ / case_name, true, kSnapshotThreshold);
+  auto restarted = std::make_shared<RaftNode>(configs[leader_index], snapshot_configs[leader_index]);
+
+  std::string actual;
+  ASSERT_TRUE(restarted->DebugGetValue("restart_fallback_40", &actual))
+      << "restart did not retain data from a previously trusted snapshot after rejecting the corrupted newest snapshot, describe="
+      << restarted->Describe();
+  EXPECT_EQ(actual, "value_40");
+
+  const std::string description = restarted->Describe();
+  const auto restored_snapshot_index = ExtractUintField(description, "last_snapshot_index");
+  ASSERT_TRUE(restored_snapshot_index.has_value()) << description;
+  EXPECT_GE(*restored_snapshot_index, *older_snapshot_index)
+      << "restart should still recover from a trusted snapshot boundary after rejecting the corrupted newest snapshot, describe="
+      << description;
+}
+
+TEST_F(RaftSnapshotRecoveryTest, RestartAfterSnapshotPublishFailureNeedsExactFailureInjectionSeam) {
+  constexpr std::uint64_t kSnapshotThreshold = 4;
+  const std::string case_name = "restart_publish_failure_contract";
+  auto cluster = MakeCluster(case_name, true, kSnapshotThreshold);
+  cluster.Start();
+
+  auto stable_leader = WaitForStableLeader(cluster.Nodes(), std::chrono::seconds(8));
+  ASSERT_TRUE(stable_leader.has_value())
+      << "leader did not stabilize before publish failure test, cluster="
+      << DescribeCluster(cluster.Nodes());
+
+  WriteManyValues(cluster.Nodes(), "restart_publish", 48);
+
+  stable_leader = WaitForStableLeader(cluster.Nodes(), std::chrono::seconds(8));
+  ASSERT_TRUE(stable_leader.has_value())
+      << "leader did not stabilize after baseline writes, cluster="
+      << DescribeCluster(cluster.Nodes());
+  const std::size_t leader_index = stable_leader->leader_index;
+
+  ASSERT_TRUE(WaitForNodeFieldAtLeast(cluster.Nodes()[leader_index],
+                                      "last_snapshot_index", 8,
+                                      std::chrono::seconds(20)))
+      << "leader did not create snapshots before publish failure test, describe="
+      << cluster.Nodes()[leader_index]->Describe();
+
+  cluster.StopAll();
+
+  const std::filesystem::path node_snapshot_root =
+      snapshot_root_ / case_name / ("node_" + std::to_string(leader_index + 1));
+  auto storage = CreateFileSnapshotStorage(node_snapshot_root.string(), "snapshot");
+
+  std::vector<SnapshotMeta> trusted_snapshots;
+  std::string error;
+  ASSERT_TRUE(storage->ListSnapshots(&trusted_snapshots, &error)) << error;
+  ASSERT_FALSE(trusted_snapshots.empty()) << node_snapshot_root.string();
+
+  const SnapshotMeta trusted_before = trusted_snapshots.front();
+  const std::uint64_t injected_index = trusted_before.last_included_index + 4;
+  const std::filesystem::path injected_final_dir =
+      node_snapshot_root / ("snapshot_" + FormatSnapshotIndex(injected_index));
+  const std::filesystem::path injected_input =
+      root_ / "injected_snapshot_inputs" / ("node_" + std::to_string(leader_index + 1) + ".bin");
+  CopyFile(trusted_before.snapshot_path, injected_input);
+
+  SnapshotMeta unused_meta;
+  {
+    ScopedEnvVar failpoint(kSnapshotStorageFailpointEnv,
+                           "snapshot_publish_visible_before_trusted_directory_sync");
+    EXPECT_FALSE(storage->SaveSnapshotFile(injected_input.string(),
+                                          injected_index,
+                                          trusted_before.last_included_term,
+                                          &unused_meta,
+                                          &error));
+  }
+  EXPECT_NE(error.find("operation=snapshot publish visible before trusted directory sync"),
+            std::string::npos)
+      << error;
+  EXPECT_NE(error.find("path=" + injected_final_dir.string()), std::string::npos) << error;
+  EXPECT_NE(error.find("linux_specific=true"), std::string::npos) << error;
+  EXPECT_NE(
+      error.find("trusted_state_expectation=if restart sees a newer snapshot publish point without the required trusted publish completion, it must reject that snapshot and continue from the previous trusted snapshot plus replayable log tail"),
+      std::string::npos)
+      << error;
+
+  EXPECT_TRUE(std::filesystem::exists(injected_final_dir)) << injected_final_dir.string();
+  EXPECT_FALSE(std::filesystem::exists(injected_final_dir / "__raft_snapshot_meta"));
+
+  SnapshotMeta loaded_snapshot;
+  bool has_snapshot = false;
+  ASSERT_TRUE(storage->LoadLatestValidSnapshot(&loaded_snapshot, &has_snapshot, &error)) << error;
+  ASSERT_TRUE(has_snapshot);
+  EXPECT_EQ(loaded_snapshot.last_included_index, trusted_before.last_included_index);
+
+  SnapshotListResult diagnostics;
+  ASSERT_TRUE(storage->ListSnapshotsWithDiagnostics(&diagnostics, &error)) << error;
+  EXPECT_NE(JoinIssueReasons(diagnostics.validation_issues).find("open snapshot meta file failed"),
+            std::string::npos);
+
+  auto configs = BuildThreeNodeConfigs(data_root_ / case_name, base_port_);
+  auto snapshot_configs =
+      BuildThreeSnapshotConfigs(snapshot_root_ / case_name, true, kSnapshotThreshold);
+  auto restarted = std::make_shared<RaftNode>(configs[leader_index], snapshot_configs[leader_index]);
+
+  std::string actual;
+  ASSERT_TRUE(restarted->DebugGetValue("restart_publish_40", &actual))
+      << "restart did not retain trusted snapshot state after rejecting injected publish failure, describe="
+      << restarted->Describe();
+  EXPECT_EQ(actual, "value_40");
+
+  const std::string description = restarted->Describe();
+  const auto restored_snapshot_index = ExtractUintField(description, "last_snapshot_index");
+  ASSERT_TRUE(restored_snapshot_index.has_value()) << description;
+  EXPECT_LT(*restored_snapshot_index, injected_index)
+      << "restart should reject the injected untrusted snapshot publish boundary, describe="
+      << description;
 }
 
 }  // namespace

@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cerrno>
 #include <chrono>
+#include <cstdlib>
 #include <cstdint>
 #include <cstring>
 #include <filesystem>
@@ -35,6 +36,92 @@ namespace raftdemo
     constexpr const char *kSnapshotMetaFileName = "__raft_snapshot_meta";
     constexpr const char *kSnapshotPrefix = "snapshot_";
     constexpr const char *kSnapshotStagingPrefix = ".snapshot_staging_";
+    constexpr const char *kSnapshotStorageFailpointEnv = "RAFT_TEST_SNAPSHOT_STORAGE_FAILPOINT";
+
+    enum class SnapshotStorageFailPoint
+    {
+      kNone,
+      kStagedPublishAfterDataMetaWrite,
+      kParentDirectorySyncAfterPublish,
+      kPublishVisibleBeforeTrustedDirectorySync,
+      kPruneRemoveOldDirectory,
+    };
+
+    SnapshotStorageFailPoint ActiveSnapshotStorageFailPoint()
+    {
+      const char *value = std::getenv(kSnapshotStorageFailpointEnv);
+      if (value == nullptr)
+      {
+        return SnapshotStorageFailPoint::kNone;
+      }
+
+      const std::string failpoint(value);
+      if (failpoint == "snapshot_staged_publish_after_data_meta_write")
+      {
+        return SnapshotStorageFailPoint::kStagedPublishAfterDataMetaWrite;
+      }
+      if (failpoint == "snapshot_parent_directory_sync_after_publish")
+      {
+        return SnapshotStorageFailPoint::kParentDirectorySyncAfterPublish;
+      }
+      if (failpoint == "snapshot_publish_visible_before_trusted_directory_sync")
+      {
+        return SnapshotStorageFailPoint::kPublishVisibleBeforeTrustedDirectorySync;
+      }
+      if (failpoint == "snapshot_prune_remove_old_directory")
+      {
+        return SnapshotStorageFailPoint::kPruneRemoveOldDirectory;
+      }
+      return SnapshotStorageFailPoint::kNone;
+    }
+
+    bool BuildInjectedSnapshotFailure(const std::string &operation,
+                                      const std::filesystem::path &path,
+                                      const std::string &trusted_state_expectation,
+                                      const std::string &detail,
+                                      std::string *error)
+    {
+      if (error != nullptr)
+      {
+        std::ostringstream oss;
+        oss << "snapshot storage failure injection triggered"
+            << ", operation=" << operation
+            << ", path=" << path.string()
+            << ", linux_specific=true"
+            << ", trusted_state_expectation=" << trusted_state_expectation;
+        if (!detail.empty())
+        {
+          oss << ", detail=" << detail;
+        }
+        *error = oss.str();
+      }
+      return false;
+    }
+
+    bool RemovePathIfExists(const std::filesystem::path &path, std::string *detail)
+    {
+      std::error_code ec;
+      if (!std::filesystem::exists(path, ec))
+      {
+        if (ec && detail != nullptr)
+        {
+          *detail = "check failure artifact path failed: " + path.string() + ": " + ec.message();
+        }
+        return !ec;
+      }
+
+      ec.clear();
+      const bool removed = std::filesystem::remove(path, ec);
+      if (ec && detail != nullptr)
+      {
+        *detail = "remove failure artifact path failed: " + path.string() + ": " + ec.message();
+      }
+      if (!removed && detail != nullptr && detail->empty())
+      {
+        *detail = "failure artifact path remained visible: " + path.string();
+      }
+      return !ec;
+    }
 
     std::uint64_t NowUnixMillis()
     {
@@ -608,6 +695,16 @@ namespace raftdemo
       std::filesystem::remove_all(staging_dir, ec);
       return false;
     }
+    if (ActiveSnapshotStorageFailPoint() ==
+        SnapshotStorageFailPoint::kStagedPublishAfterDataMetaWrite)
+    {
+      return BuildInjectedSnapshotFailure(
+          "snapshot staged publish after data/meta write",
+          final_dir,
+          "if staged snapshot publish fails before the final trusted publish point, restart must keep using the previously trusted snapshot and ignore the incomplete newer snapshot",
+          "staging snapshot directory left in place for deterministic recovery fallback validation",
+          error);
+    }
 
     ec.clear();
     if (std::filesystem::exists(final_dir, ec))
@@ -651,13 +748,37 @@ namespace raftdemo
       std::filesystem::remove_all(staging_dir, ec);
       return false;
     }
+    const std::filesystem::path data_path = final_dir / kSnapshotDataFileName;
+    const std::filesystem::path meta_path = final_dir / kSnapshotMetaFileName;
+
+    const SnapshotStorageFailPoint failpoint = ActiveSnapshotStorageFailPoint();
+    if (failpoint == SnapshotStorageFailPoint::kParentDirectorySyncAfterPublish ||
+        failpoint == SnapshotStorageFailPoint::kPublishVisibleBeforeTrustedDirectorySync)
+    {
+      std::string detail;
+      RemovePathIfExists(meta_path, &detail);
+      const std::string operation =
+          failpoint == SnapshotStorageFailPoint::kParentDirectorySyncAfterPublish
+              ? "snapshot parent directory sync after publish"
+              : "snapshot publish visible before trusted directory sync";
+      const std::filesystem::path failure_path =
+          failpoint == SnapshotStorageFailPoint::kParentDirectorySyncAfterPublish
+              ? root
+              : final_dir;
+      const std::string trusted_state_expectation =
+          failpoint == SnapshotStorageFailPoint::kParentDirectorySyncAfterPublish
+              ? "if the new snapshot directory becomes visible but the parent directory sync does not complete, restart must stay on the last fully durable trusted snapshot boundary"
+              : "if restart sees a newer snapshot publish point without the required trusted publish completion, it must reject that snapshot and continue from the previous trusted snapshot plus replayable log tail";
+      return BuildInjectedSnapshotFailure(operation,
+                                          failure_path,
+                                          trusted_state_expectation,
+                                          detail,
+                                          error);
+    }
     if (!SyncDirectory(root, error))
     {
       return false;
     }
-
-    const std::filesystem::path data_path = final_dir / kSnapshotDataFileName;
-    const std::filesystem::path meta_path = final_dir / kSnapshotMetaFileName;
 
     ec.clear();
     std::filesystem::remove(input_snapshot_file, ec);
@@ -835,6 +956,16 @@ namespace raftdemo
     {
       if (!snapshots[i].snapshot_dir.empty())
       {
+        if (ActiveSnapshotStorageFailPoint() ==
+            SnapshotStorageFailPoint::kPruneRemoveOldDirectory)
+        {
+          return BuildInjectedSnapshotFailure(
+              "snapshot prune remove old directory",
+              snapshots[i].snapshot_dir,
+              "if pruning old snapshots fails during remove/publish cleanup, the newest trusted snapshot must remain loadable and restart must not mis-classify prune leftovers as the chosen trusted snapshot",
+              "old snapshot directory removal was rejected before mutating trusted snapshot selection",
+              error);
+        }
         ec.clear();
         std::filesystem::remove_all(snapshots[i].snapshot_dir, ec);
         if (ec && error != nullptr)
