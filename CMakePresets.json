@@ -24,6 +24,18 @@
                 "RAFT_LINK_JOBS": "1",
                 "RAFT_PROTO_JOBS": "1"
             }
+        },
+        {
+            "name": "windows",
+            "displayName": "Visual Studio Community 2022 Release - amd64",
+            "description": "Using Visual Studio 17 2022 MSVC x64",
+            "generator": "Visual Studio 17 2022",
+            "toolset": "host=x64",
+            "architecture": "x64",
+            "binaryDir": "${sourceDir}/build/${presetName}",
+            "cacheVariables": {
+                "CMAKE_INSTALL_PREFIX": "${sourceDir}/out/install/${presetName}"
+            }
         }
     ],
     "buildPresets": [
@@ -38,6 +50,12 @@
             "displayName": "Build Debug Ninja safe single job",
             "configurePreset": "debug-ninja-safe",
             "jobs": 1
+        },
+        {
+            "name": "windows-debug",
+            "displayName": "Visual Studio Community 2022 Release - amd64 - Debug",
+            "configurePreset": "windows",
+            "configuration": "Debug"
         }
     ],
     "testPresets": [
