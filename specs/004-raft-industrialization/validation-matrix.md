@@ -143,6 +143,27 @@ Current US2 status:
 - T018 已提供 state-machine replay consistency 回归证据，当前没有暴露 `state_machine.cpp` 或 `raft_node.cpp` 生产缺口。
 - T019、T020、T021 均以 no-op 关闭：因为对应 tests-first 回归均通过，当前没有进入生产修复的输入证据。
 - 当前没有 US2 tests-first 红灯；US2 consistency 进入 regression-only 状态。
+- US2 完成后，lag/restart/leader-switch 一致性已具备独立验收所需的回归证据，不依赖新增协议语义或大范围生产代码重写。
+
+### US2 Platform-Neutral Regression Coverage
+
+- catch-up after lag:
+  follower 落后 live log 后通过 log replay catch-up 恢复，以及 follower 落后到 retained snapshot boundary 后通过 snapshot handoff catch-up 恢复，均已由 `RaftSnapshotCatchupTest` / `RaftIntegrationTest` 受管 CTest 覆盖。
+- leader switch consistency:
+  leader 切换后 committed state 保持不变、新 leader 继续推进 committed log、lagging follower 与新 proposal 混合情况下状态仍能收敛，均已由 `RaftLeaderSwitchOrderingTest` 覆盖。
+- commit/apply ordering:
+  `commit_index` 与 `last_applied` 的顺序边界，以及 leader switch / follower catch-up 交织时不出现 commit/apply 逆序，已由 `RaftLeaderSwitchOrderingTest` 和相关 US2 回归覆盖。
+- state-machine replay consistency:
+  snapshot load 后 tail replay、restart 后 committed log apply、state machine 最终视图与 committed/applied 状态一致，以及 duplicate apply / missed apply 风险，已由 `KvStateMachineTest` / `RaftSnapshotRecoveryTest` 覆盖。
+
+### US2 Linux-Primary Observation Or Follow-Up Risk
+
+- timing-sensitive clustered validation:
+  虽然 US2 语义已由平台无关回归覆盖，但更长链路、时序更敏感的集群稳定性观察仍主要依赖 Linux 主验收入口，例如 `./test.sh --group snapshot-catchup`、`replicator`、`replication` 的低并发复验。
+- retained-artifact diagnosis:
+  若后续需要保留 `raft_data/`、`raft_snapshots/` 或构造现场进行人工诊断，当前仍以 Linux Bash-first 的 `--keep-data` 流程为主；这属于诊断便利性差异，不影响已记录的 US2 平台无关逻辑证据。
+- cross-platform runtime follow-up:
+  Windows/macOS 目前仍以 `ctest --test-dir build ...` 的平台无关逻辑回归为主，尚未补充与 Linux 主验收等价的长链路运行时观察；这仍属于 `W6/W8` 的后续范围，而不是 US2 未完成项。
 
 ## Current Risk Register
 

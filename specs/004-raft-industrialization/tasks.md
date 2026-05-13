@@ -336,7 +336,7 @@
   Tests To Run: `ctest --test-dir build --output-on-failure -R '^(KvStateMachineTest|RaftSnapshotRecoveryTest|RaftIntegrationTest)\.'`; `./test.sh --group snapshot-recovery`.
   Execution Note: No-op。T018 的 state-machine replay consistency 回归测试已通过，未发现 `modules/raft/state_machine/state_machine.cpp` 或 `modules/raft/node/raft_node.cpp` 的真实实现缺口；本任务未修改生产代码。
 
-- [ ] T022 [US2] Update `specs/004-raft-industrialization/validation-matrix.md` with US2 consistency evidence
+- [x] T022 [US2] Update `specs/004-raft-industrialization/validation-matrix.md` with US2 consistency evidence
   Goal: 记录 catch-up、leader switch、apply/replay 一致性的新增回归证据与未覆盖时序风险。
   Input: T016-T021 results, `validation-matrix.md`.
   Scope: 文档更新。
