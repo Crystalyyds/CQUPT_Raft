@@ -228,7 +228,8 @@
   Basis: `plan.md` W3；constitution II/III；`spec.md` FR-010。
   Tests To Run: T012/T013 相关测试；`./test.sh --group persistence`; `./test.sh --group snapshot-recovery`; `./test.sh --group diagnosis`.
 
-- [ ] T015 [US1] Update `specs/004-raft-industrialization/validation-matrix.md` with accepted US1 evidence
+
+- [x] T015 [US1] Update `specs/004-raft-industrialization/validation-matrix.md` with accepted US1 evidence
   Goal: 把 Linux-specific durability 注入证据、平台无关恢复证据和 deferred Windows/macOS 范围正式记录下来。
   Input: T006-T014 results, `validation-matrix.md`, `quickstart.md`.
   Scope: 文档更新。

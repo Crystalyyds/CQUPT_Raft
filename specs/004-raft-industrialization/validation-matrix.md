@@ -36,7 +36,7 @@ cross-platform gaps are scheduled for follow-up work.
 |----------|------|----------------|-------------|--------------------|----------------|------------------------|
 | P0 | Final Linux validation flaky stabilization | Not complete | `003 progress.md` blocked items for snapshot recovery and split-brain timing failures | `./test.sh --group snapshot-recovery`, `./test.sh --group election`, targeted `ctest -R` reruns | Yes | Platform-neutral rerun through `ctest --preset debug-tests`; no equivalent timing guarantee claimed |
 | P0 | Exact durability failure injection (`fsync`, directory sync, rename/replace, prune/remove, partial write) | Missing | `003 progress.md` blocked T613-T616 | New targeted persistence/snapshot tests plus Linux reruns | Yes | Explicit deferred runtime validation; preserve documentation-only fallback |
-| P0 | Restart trusted-state matrix for term/vote/log/snapshot metadata/applied state | Partially covered | `spec.md` FR-003/FR-010, `plan.md` W3 | `./test.sh --group persistence`, `snapshot-recovery`, `diagnosis` | Partially | Platform-neutral recovery tests remain valid; crash semantics not over-claimed |
+| P0 | Restart trusted-state matrix for term/vote/log/snapshot metadata/applied state | US1 accepted; managed regression evidence in place | `spec.md` FR-003/FR-010, `plan.md` W3 | `./test.sh --group persistence`, `snapshot-recovery`, `diagnosis`; targeted `ctest -R '^(PersistenceTest|RaftSegmentStorageTest|RaftSnapshotRecoveryTest|RaftSnapshotDiagnosisTest)\.'` | Partially | Platform-neutral recovery tests remain valid; Linux-specific durability evidence is recorded separately and crash semantics are not over-claimed |
 | P1 | Catch-up after lag, compaction, restart, and snapshot handoff | Implemented but needs stronger proof | `plan.md` W4, current gap classification `B/C` | `./test.sh --group snapshot-catchup`, `integration`, `replicator` | No | Same tests should remain runnable via CTest |
 | P1 | Leader switch and commit/apply ordering under churn | Implemented but still risky | `plan.md` W4, current gap classification `B/C` | `./test.sh --group replication`, `election`, `replicator` | No | Same tests should remain runnable via CTest |
 | P1 | State-machine apply/replay consistency after snapshot/restart | Implemented but needs stronger proof | `plan.md` W5 | `./test.sh --group snapshot-recovery`, targeted `ctest -R` on state machine and integration tests | No | Same tests should remain runnable via CTest |
@@ -114,6 +114,20 @@ For these areas, Windows/macOS follow-up must either:
   regression, or
 - remain explicitly deferred until runtime validation exists.
 
+## US1 Accepted Restart Recovery Evidence
+
+| Evidence area | Covered scenarios | Entrypoint | Latest status | Platform scope |
+|---------------|-------------------|------------|---------------|----------------|
+| Hard-state and log-boundary restart matrix | old-meta/new-log, new-meta/old-log, commit/apply clamp, missing first segment, final segment tail truncate 后 trusted log prefix 选择 | `CTEST_PARALLEL_LEVEL=1 ctest --test-dir build --output-on-failure -R '^(PersistenceTest|RaftSegmentStorageTest)\.'` | PASS | 平台无关恢复逻辑证据；如涉及 exact durability 边界，则由 Linux-specific 注入测试补充 |
+| Snapshot metadata and applied-state restart matrix | invalid snapshot rejection, all-invalid fallback, metadata mismatch, corrupted newest snapshot fallback, trusted snapshot 选择后一致的 applied replay | `CTEST_PARALLEL_LEVEL=1 ctest --test-dir build --output-on-failure -R '^(RaftSnapshotRecoveryTest|RaftSnapshotDiagnosisTest)\.'` | PASS | 平台无关恢复逻辑证据 |
+| Linux-specific durability failure injection and diagnostics | meta/log/snapshot 的 file sync、directory sync、replace/rename、prune/remove、partial write 边界及对应 trusted-state 预期 | `CTEST_PARALLEL_LEVEL=1 ctest --test-dir build --output-on-failure -R '^(PersistenceTest|RaftSegmentStorageTest|SnapshotStorageReliabilityTest|RaftSnapshotRecoveryTest)\.'` | PASS | Linux-specific runtime evidence；Windows/macOS 仅保留逻辑回归 fallback，不声称等价注入语义 |
+
+Current US1 status:
+
+- T012 与 T013 的 restart matrix 已纳入受管 GTest / CTest 回归。
+- T014 已修复 restart trusted-state / final-segment trusted-prefix 恢复缺口。
+- 当前没有遗留 tests-first 红灯；US1 restart recovery 进入 regression-only 状态。
+
 ## Current Risk Register
 
 | ID | Risk | Current classification | Evidence | Follow-up task area |
@@ -121,7 +135,7 @@ For these areas, Windows/macOS follow-up must either:
 | R1 | Snapshot recovery timing assumption causes false negative acceptance failures | Complete but consistency-risky | `003 progress.md` blocked item 1 | T003, T005 |
 | R2 | Split-brain timing assumption causes false negative acceptance failures | Complete but consistency-risky | `003 progress.md` blocked item 2 | T004, T005 |
 | R3 | Exact sync/rename/prune failure boundaries are not covered by deterministic tests | Half-finished / missing industrialization ability | `003 progress.md` blocked T613-T616 | T006-T011 |
-| R4 | Restart trusted-state combinations are stronger than before, but still not exhaustively classified | Complete but under-tested | `plan.md` W3 | T012-T015 |
+| R4 | Restart trusted-state combinations for term/vote/log/snapshot metadata/applied state regress | Accepted for US1 and protected by managed restart matrix tests | T012/T013 targeted matrices plus T014 recovery fixes | Regression only; keep evidence in T015 |
 | R5 | Catch-up, leader switch, and replay consistency need stronger regression evidence | Complete but under-tested / risky | `plan.md` W4/W5 | T016-T022 |
 | R6 | Current validation flow is useful on Linux but not yet consolidated cross-platform | Cross-platform risk | `test.sh`, `CMakePresets.json`, `plan.md` W6 | T023-T029 |
 | R7 | Windows/macOS runtime semantics for durability-related paths are still not verified | Cross-platform risk / deferred | `003 progress.md` notes, `spec.md` platform scope | T027, T031, T032 |
@@ -141,12 +155,17 @@ For these areas, Windows/macOS follow-up must either:
   `RaftSnapshotDiagnosisTest.RestartedSingleNodeLoadsSnapshotAndTailLogsWithoutPeers`
   and
   `RaftSnapshotDiagnosisTest.CompactedClusterReplicatesNewLogAfterRestartedLeaderStepsDown`
+- Restart trusted-state and log-boundary matrix coverage from T012/T014 via
+  `PersistenceTest` and `RaftSegmentStorageTest` targeted restart matrices
+- Snapshot metadata and applied-state restart matrix coverage from T013 via
+  `RaftSnapshotRecoveryTest` and `RaftSnapshotDiagnosisTest`
+- Current US1 restart recovery acceptance has no remaining tests-first red
+  cases in the managed CTest path
 
 ### Enters Follow-Up Hardening
 
 - Linux flaky acceptance stabilization
 - Exact failure injection seams and tests
-- Restart trusted-state coverage completion
 - Catch-up and leader-switch regression strengthening
 - State-machine replay consistency strengthening
 - Cross-platform validation entry consolidation
