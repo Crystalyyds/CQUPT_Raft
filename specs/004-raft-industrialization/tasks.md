@@ -270,7 +270,7 @@
   Goal: 覆盖 leader 切换后 committed state 保持不变、新日志继续一致推进、commit/apply 不逆序。
   Input: `tests/test_raft_replicator_behavior.cpp`, `tests/test_raft_log_replication.cpp`, `tests/test_raft_commit_apply.cpp`, `spec.md`.
   Scope: 只改测试文件。
-  Acceptance: 测试能在 leader 变化、follower 追赶和新 proposal 混合情况下验证一致性，而不是只验证单一 steady-state 路径。
+  AcceptanceX: 测试能在 leader 变化、follower 追赶和新 proposal 混合情况下验证一致性，而不是只验证单一 steady-state 路径。
   Production Code: No.
   Test Only: Yes.
   Cross-Platform: Yes.
@@ -360,7 +360,7 @@
 
 ### Implementation for User Story 3
 
-- [ ] T023 [P] [US3] Refine `test.sh` into explicit platform-neutral vs Linux-specific sections
+- [x] T023 [P] [US3] Refine `test.sh` into explicit platform-neutral vs Linux-specific sections
   Goal: 让 Bash 主入口清楚标记 Linux-specific 组、平台无关组、`--keep-data` 和失败 rerun 指南。
   Input: `test.sh`, `validation-matrix.md`, `contracts/validation-entrypoints.md`.
   Scope: 只改 `test.sh` 和相关 spec 文档。

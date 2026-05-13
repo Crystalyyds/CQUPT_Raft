@@ -84,6 +84,66 @@
 - `election`：选举与 split-brain 路径
 - `segment-cluster`：高负载 segment/snapshot 组合路径
 
+## `test.sh` section map 约定
+
+`test.sh` 的帮助输出和运行期摘要现在必须显式区分以下 section：
+
+### 1. 平台无关基础回归组
+
+- `unit`
+- `snapshot-storage`
+- `kv-service`
+- `segment-basic`
+- `election`
+- `replication`
+- `integration`
+- `snapshot-catchup`
+- `snapshot-restart`
+- `replicator`
+
+解释规则：
+
+- 这些 group 的基础逻辑回归属于 platform-neutral baseline。
+- 它们仍可以在 Linux Bash 主入口下低并发重跑，但不能因此被误标记为
+  Linux-only 语义。
+- 若环境不使用 Bash 主入口，优先退回
+  `ctest --preset debug-tests --output-on-failure` 或对应的 `ctest -R`。
+
+### 2. 共享 restart / durability 回归组
+
+- `persistence`
+
+解释规则：
+
+- 该 group 的 restart recovery / trusted-state 主体逻辑属于平台无关回归。
+- 若牵涉 exact durability、retained artifacts 或 Bash-first 排障过程，
+  解释时必须同时引用 Linux-specific 边界，而不是把整组简单标成
+  platform-neutral 或 Linux-only。
+
+### 3. Linux-specific / Linux-primary 聚焦组
+
+- `snapshot-recovery`
+- `diagnosis`
+- `segment-cluster`
+
+解释规则：
+
+- 这些 group 必须在 `test.sh` 头部或输出中明确标成
+  Linux-specific / Linux-primary focus groups。
+- 这里的 Linux-specific 指当前主入口解释、时序风险或 retained-artifact
+  排障边界，不得被扩写成“协议或业务逻辑只在 Linux 正确”。
+
+### 4. Linux Bash 主扫入口
+
+- `all`
+
+解释规则：
+
+- `all` 必须明确说明执行顺序：
+  platform-neutral base regression groups -> `persistence` ->
+  Linux-specific / Linux-primary focus groups -> final full-suite check。
+- 该入口是 Linux Bash 主验收路径，不等价于非 Bash / 跨平台 fallback。
+
 ## Linux-specific 分组与解释规则
 
 下列证据必须显式按 Linux-primary 或 Linux-specific 解释：
@@ -106,8 +166,20 @@
   - `./test.sh --group diagnosis --keep-data`
 - 文档必须明确：
   - `--keep-data` 是 Linux Bash 主入口能力
+  - `test.sh` 必须把 `--keep-data` 说明放在 section map 或帮助输出中
+  - 失败后应先按原 group 使用 `CTEST_PARALLEL_LEVEL=1 ./test.sh --group <name>`
+    重跑，再按需追加 `--keep-data`
   - `ctest --preset debug-tests` 不默认提供等价现场保留能力
   - 若需要 retained artifacts 做排障，应回到 Linux 主入口重跑
+
+## 非 Bash / 跨平台 fallback 约定
+
+- 当前文档化 fallback 入口仍是：
+  - `ctest --preset debug-tests --output-on-failure`
+- 若需要更细粒度重跑，可使用与 `test.sh` 对应的直接 `ctest --test-dir build -R`
+  命令，但解释范围仍属于 platform-neutral logic fallback。
+- 在 `test.ps1` 或等价 wrapper 尚未落地前，不得把非 Bash fallback 描述成
+  与 Linux Bash 主入口完全等价。
 
 ## 非目标
 

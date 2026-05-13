@@ -70,6 +70,19 @@ cross-platform gaps are scheduled for follow-up work.
 | `./test.sh --group segment-cluster` | Focused clustered segment/snapshot stress rerun | US2/US3 regression | Partially | Optional via `--keep-data` | Main segment rollover and retained-artifact stress bucket |
 | `ctest --preset debug-tests --output-on-failure` | Platform-neutral fallback | Cross-platform baseline execution contract | No | No | Must remain valid outside Bash-first flows |
 
+## `test.sh` Section Map
+
+`test.sh` 的帮助输出和执行摘要必须明确展示以下 section，避免把
+platform-neutral baseline、shared restart/durability 和 Linux-specific
+解释边界混在一起。
+
+| Section | Groups | Interpretation rule | Fallback |
+|---------|--------|---------------------|----------|
+| Platform-neutral base regression | `unit`, `snapshot-storage`, `kv-service`, `segment-basic`, `election`, `replication`, `integration`, `snapshot-catchup`, `snapshot-restart`, `replicator` | 基础逻辑回归属于平台无关 baseline；可在 Linux Bash 主入口低并发重跑，但不能因此误标记为 Linux-only 语义 | `ctest --preset debug-tests --output-on-failure` 或对应 `ctest -R` |
+| Shared restart / durability regression | `persistence` | restart recovery / trusted-state 主体逻辑属于平台无关回归；若解释涉及 exact durability 或 retained artifacts，需同时引用 Linux-specific 边界 | `ctest --preset debug-tests --output-on-failure`，必要时回到 Linux Bash 主入口补充 retained-artifact 证据 |
+| Linux-specific / Linux-primary focus | `snapshot-recovery`, `diagnosis`, `segment-cluster` | 当前主入口解释、时序风险和 retained-artifact 排障以 Linux Bash-first 为准；不得夸大为协议只在 Linux 正确 | 仅提供 logic fallback；不声称 Linux 等价 runtime 语义 |
+| Linux Bash primary sweep | `all` | 执行顺序必须明确为 platform-neutral base regression -> `persistence` -> Linux-specific / Linux-primary focus -> final full-suite check | 非 Bash 环境改走 `ctest --preset debug-tests --output-on-failure` |
+
 ## Grouped Linux Rerun Guide
 
 Use the following groups as the primary Linux rerun buckets for failure
@@ -89,6 +102,9 @@ Notes:
 
 - `--keep-data` is a Linux Bash-first capability. It retains `raft_data/`,
   `raft_snapshots/`, and `build/tests/raft_test_data/` for local diagnosis.
+- `test.sh` must document `--keep-data` next to the section map and state that
+  the first rerun step is `CTEST_PARALLEL_LEVEL=1 ./test.sh --group <name>`,
+  with `--keep-data` added only when retained artifacts are needed.
 - For Windows/macOS, the fallback entry remains
   `ctest --preset debug-tests --output-on-failure` or the corresponding direct
   `ctest --test-dir build ... -R ...` command. These fallbacks provide logic
