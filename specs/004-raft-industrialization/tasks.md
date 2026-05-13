@@ -279,7 +279,7 @@
   Basis: `plan.md` W4；`spec.md` FR-004；US2 acceptance scenarios。
   Tests To Run: `./test.sh --group replication`; `./test.sh --group replicator`.
 
-- [ ] T018 [P] [US2] Add state-machine replay consistency regressions in `tests/test_state_machine.cpp` and `tests/test_raft_snapshot_restart.cpp`
+- [x] T018 [P] [US2] Add state-machine replay consistency regressions in `tests/test_state_machine.cpp` and `tests/test_raft_snapshot_restart.cpp`
   Goal: 覆盖 snapshot load 后 replay、restart 后 apply、state machine 视图一致性边界。
   Input: `tests/test_state_machine.cpp`, `tests/test_raft_snapshot_restart.cpp`, `plan.md`, `data-model.md`.
   Scope: 只改测试文件。
@@ -294,7 +294,7 @@
 
 ### Implementation for User Story 2
 
-- [ ] T019 [US2] Apply minimal catch-up fixes in `modules/raft/replication/replicator.cpp` if T016 reveals real defects
+- [x] T019 [US2] Apply minimal catch-up fixes in `modules/raft/replication/replicator.cpp` if T016 reveals real defects
   Goal: 仅在新回归证明 follower catch-up 边界有缺陷时，最小修复 replicator 的回退、snapshot handoff 或 next-index 推进逻辑。
   Input: T016 failing evidence, `modules/raft/replication/replicator.cpp`, related existing tests.
   Scope: 仅改 `modules/raft/replication/replicator.cpp`。
@@ -306,8 +306,9 @@
   Windows/macOS Fallback: Yes, 修复结果必须通过平台无关测试入口。
   Basis: `plan.md` W4；constitution III；现状分析中的 catch-up industrialization gap。
   Tests To Run: `./test.sh --group snapshot-catchup`; `./test.sh --group replicator`.
+  Execution Note: No-op。T016 的 log replay catch-up 与 snapshot handoff catch-up 回归测试已通过，未发现 `modules/raft/replication/replicator.cpp` 的真实实现缺口；本任务未修改生产代码。
 
-- [ ] T020 [US2] Apply minimal leader-switch or orchestration fixes in `modules/raft/node/raft_node.cpp` if T017 reveals real defects
+- [x] T020 [US2] Apply minimal leader-switch or orchestration fixes in `modules/raft/node/raft_node.cpp` if T017 reveals real defects
   Goal: 在不改变协议语义的前提下，修复 leader 切换、commit/apply 顺序或 restart 后推进边界的真实缺陷。
   Input: T017 failing evidence, `modules/raft/node/raft_node.cpp`, related storage/replication tests.
   Scope: 限定改 `raft_node.cpp`；按 AGENTS 规则同步检查 `replication`、`storage`、`state_machine` 相关测试。
@@ -319,8 +320,9 @@
   Windows/macOS Fallback: Yes.
   Basis: `plan.md` W4；constitution III；`spec.md` US2 acceptance scenario 2。
   Tests To Run: `./test.sh --group replication`; `./test.sh --group election`; `./test.sh --group replicator`.
+  Execution Note: No-op。T017 的 leader-switch / commit-apply ordering 回归测试已通过，未发现 `modules/raft/node/raft_node.cpp` 的真实实现缺口；本任务未修改生产代码。
 
-- [ ] T021 [US2] Apply minimal replay fixes in `modules/raft/state_machine/state_machine.cpp` or `modules/raft/node/raft_node.cpp` if T018 reveals real defects
+- [x] T021 [US2] Apply minimal replay fixes in `modules/raft/state_machine/state_machine.cpp` or `modules/raft/node/raft_node.cpp` if T018 reveals real defects
   Goal: 修复 apply/replay 与 snapshot load 边界上的真实一致性问题，但不修改状态机格式或公共语义。
   Input: T018 failing evidence, `state_machine.cpp`, `raft_node.cpp`, existing snapshot restart tests.
   Scope: 限定在 `state_machine.cpp` 和必要的 `raft_node.cpp`。
@@ -332,6 +334,7 @@
   Windows/macOS Fallback: Yes.
   Basis: `plan.md` W5；`spec.md` FR-003；现状分析中的 apply/recovery consistency gap。
   Tests To Run: `ctest --test-dir build --output-on-failure -R '^(KvStateMachineTest|RaftSnapshotRecoveryTest|RaftIntegrationTest)\.'`; `./test.sh --group snapshot-recovery`.
+  Execution Note: No-op。T018 的 state-machine replay consistency 回归测试已通过，未发现 `modules/raft/state_machine/state_machine.cpp` 或 `modules/raft/node/raft_node.cpp` 的真实实现缺口；本任务未修改生产代码。
 
 - [ ] T022 [US2] Update `specs/004-raft-industrialization/validation-matrix.md` with US2 consistency evidence
   Goal: 记录 catch-up、leader switch、apply/replay 一致性的新增回归证据与未覆盖时序风险。

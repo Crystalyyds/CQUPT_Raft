@@ -128,6 +128,22 @@ Current US1 status:
 - T014 已修复 restart trusted-state / final-segment trusted-prefix 恢复缺口。
 - 当前没有遗留 tests-first 红灯；US1 restart recovery 进入 regression-only 状态。
 
+## US2 Accepted Consistency Evidence
+
+| Evidence area | Covered scenarios | Entrypoint | Latest status | Platform scope |
+|---------------|-------------------|------------|---------------|----------------|
+| Catch-up and snapshot handoff consistency | follower 落后 live log 后通过 log replay catch-up 恢复；follower 落后到 retained snapshot boundary 后通过 snapshot handoff catch-up 恢复；catch-up 后 committed ordering 保持一致 | `CTEST_PARALLEL_LEVEL=1 ctest --test-dir build --output-on-failure -R '^(RaftSnapshotCatchupTest|RaftIntegrationTest)\.'` | PASS | 平台无关 cluster consistency 逻辑证据 |
+| Leader-switch and commit/apply ordering consistency | leader 切换后 committed state 保持不变；新 leader 继续推进新日志；lagging follower、leader switch 与新 proposal 混合时 commit/apply 不逆序 | `CTEST_PARALLEL_LEVEL=1 ctest --test-dir build --output-on-failure -R '^(RaftLeaderSwitchOrderingTest)\.'` | PASS | 平台无关 cluster consistency 逻辑证据 |
+| State-machine replay consistency | snapshot load 后 tail replay 不丢失；restart 后 committed log apply 一致；state machine 最终视图与 committed/applied 状态一致；duplicate apply / missed apply 风险受回归保护 | `CTEST_PARALLEL_LEVEL=1 ctest --test-dir build --output-on-failure -R '^(KvStateMachineTest|RaftSnapshotRecoveryTest)\.'` | PASS | 平台无关 replay / restart consistency 逻辑证据 |
+
+Current US2 status:
+
+- T016 已提供 catch-up / snapshot handoff 回归证据，当前没有暴露 `replicator.cpp` 生产缺口。
+- T017 已提供 leader-switch / commit-apply ordering 回归证据，当前没有暴露 `raft_node.cpp` 生产缺口。
+- T018 已提供 state-machine replay consistency 回归证据，当前没有暴露 `state_machine.cpp` 或 `raft_node.cpp` 生产缺口。
+- T019、T020、T021 均以 no-op 关闭：因为对应 tests-first 回归均通过，当前没有进入生产修复的输入证据。
+- 当前没有 US2 tests-first 红灯；US2 consistency 进入 regression-only 状态。
+
 ## Current Risk Register
 
 | ID | Risk | Current classification | Evidence | Follow-up task area |
@@ -136,7 +152,7 @@ Current US1 status:
 | R2 | Split-brain timing assumption causes false negative acceptance failures | Complete but consistency-risky | `003 progress.md` blocked item 2 | T004, T005 |
 | R3 | Exact sync/rename/prune failure boundaries are not covered by deterministic tests | Half-finished / missing industrialization ability | `003 progress.md` blocked T613-T616 | T006-T011 |
 | R4 | Restart trusted-state combinations for term/vote/log/snapshot metadata/applied state regress | Accepted for US1 and protected by managed restart matrix tests | T012/T013 targeted matrices plus T014 recovery fixes | Regression only; keep evidence in T015 |
-| R5 | Catch-up, leader switch, and replay consistency need stronger regression evidence | Complete but under-tested / risky | `plan.md` W4/W5 | T016-T022 |
+| R5 | Catch-up, leader switch, and replay consistency need stronger regression evidence | Accepted for US2 and protected by managed consistency regressions | T016/T017/T018 targeted regressions passed; T019/T020/T021 were no-op because no production defect evidence was proven | Regression only; documentation follow-up stays in T022 |
 | R6 | Current validation flow is useful on Linux but not yet consolidated cross-platform | Cross-platform risk | `test.sh`, `CMakePresets.json`, `plan.md` W6 | T023-T029 |
 | R7 | Windows/macOS runtime semantics for durability-related paths are still not verified | Cross-platform risk / deferred | `003 progress.md` notes, `spec.md` platform scope | T027, T031, T032 |
 
@@ -159,15 +175,23 @@ Current US1 status:
   `PersistenceTest` and `RaftSegmentStorageTest` targeted restart matrices
 - Snapshot metadata and applied-state restart matrix coverage from T013 via
   `RaftSnapshotRecoveryTest` and `RaftSnapshotDiagnosisTest`
+- Catch-up and snapshot handoff consistency coverage from T016 via
+  `RaftSnapshotCatchupTest` and `RaftIntegrationTest`
+- Leader-switch and commit/apply ordering consistency coverage from T017 via
+  `RaftLeaderSwitchOrderingTest`
+- State-machine replay consistency coverage from T018 via
+  `KvStateMachineTest` and `RaftSnapshotRecoveryTest`
+- T019/T020/T021 concluded as no-op because T016/T017/T018 did not produce
+  tests-first red evidence requiring production fixes
 - Current US1 restart recovery acceptance has no remaining tests-first red
   cases in the managed CTest path
+- Current US2 consistency acceptance has no remaining tests-first red cases in
+  the managed CTest path
 
 ### Enters Follow-Up Hardening
 
 - Linux flaky acceptance stabilization
 - Exact failure injection seams and tests
-- Catch-up and leader-switch regression strengthening
-- State-machine replay consistency strengthening
 - Cross-platform validation entry consolidation
 - Platform support and failure-localization documentation
 - Windows/macOS runtime-validation and CI follow-up definition
