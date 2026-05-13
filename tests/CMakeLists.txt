@@ -59,6 +59,7 @@ add_raft_gtest(test_raft_election test_raft_election.cpp)
 add_raft_gtest(test_raft_log_replication test_raft_log_replication.cpp)
 add_raft_gtest(test_raft_commit_apply test_raft_commit_apply.cpp)
 add_raft_gtest(test_raft_split_brain test_raft_split_brain.cpp)
+add_raft_gtest(test_t017_leader_switch_ordering test_t017_leader_switch_ordering.cpp)
 
 # =========================
 # Persistence / snapshot legacy tests

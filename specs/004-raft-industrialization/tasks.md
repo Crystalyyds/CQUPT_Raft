@@ -266,7 +266,7 @@
   Basis: `plan.md` W4；`spec.md` FR-004；现状分析中 follower catch-up 仍属需补强区域。
   Tests To Run: `./test.sh --group snapshot-catchup`; `./test.sh --group integration`.
 
-- [ ] T017 [P] [US2] Add leader-switch and commit/apply ordering regressions in `tests/test_raft_replicator_behavior.cpp`, `tests/test_raft_log_replication.cpp`, and `tests/test_raft_commit_apply.cpp`
+- [x] T017 [P] [US2] Add leader-switch and commit/apply ordering regressions in `tests/test_raft_replicator_behavior.cpp`, `tests/test_raft_log_replication.cpp`, and `tests/test_raft_commit_apply.cpp`
   Goal: 覆盖 leader 切换后 committed state 保持不变、新日志继续一致推进、commit/apply 不逆序。
   Input: `tests/test_raft_replicator_behavior.cpp`, `tests/test_raft_log_replication.cpp`, `tests/test_raft_commit_apply.cpp`, `spec.md`.
   Scope: 只改测试文件。
