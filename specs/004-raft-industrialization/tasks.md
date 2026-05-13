@@ -253,7 +253,7 @@
 
 ### Tests for User Story 2
 
-- [ ] T016 [P] [US2] Add lagging-follower and compaction catch-up regressions in `tests/test_raft_snapshot_catchup.cpp` and `tests/raft_integration_test.cpp`
+- [x] T016 [P] [US2] Add lagging-follower and compaction catch-up regressions in `tests/test_raft_snapshot_catchup.cpp` and `tests/raft_integration_test.cpp`
   Goal: 覆盖 follower 落后 live log 和 retained snapshot boundary 两类 catch-up 场景。
   Input: `tests/test_raft_snapshot_catchup.cpp`, `tests/raft_integration_test.cpp`, `plan.md`, `validation-matrix.md`.
   Scope: 只改测试文件。

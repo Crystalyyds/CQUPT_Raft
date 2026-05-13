@@ -60,6 +60,13 @@ Command SetCommand(const std::string& key, const std::string& value) {
   return command;
 }
 
+Command DeleteCommand(const std::string& key) {
+  Command command;
+  command.type = CommandType::kDelete;
+  command.key = key;
+  return command;
+}
+
 std::uint64_t NowForPath() {
   return static_cast<std::uint64_t>(
       std::chrono::duration_cast<std::chrono::milliseconds>(
@@ -379,6 +386,35 @@ bool WaitForValueOnAll(const std::vector<std::shared_ptr<RaftNode>>& nodes,
   return false;
 }
 
+bool WaitForMissingOnAll(const std::vector<std::shared_ptr<RaftNode>>& nodes,
+                         const std::string& key,
+                         std::chrono::milliseconds timeout,
+                         const std::vector<std::size_t>& excluded = {}) {
+  const auto deadline = Clock::now() + timeout;
+  while (Clock::now() < deadline) {
+    bool all_missing = true;
+
+    for (std::size_t i = 0; i < nodes.size(); ++i) {
+      if (IsExcluded(i, excluded) || !nodes[i]) {
+        continue;
+      }
+
+      std::string value;
+      if (nodes[i]->DebugGetValue(key, &value)) {
+        all_missing = false;
+        break;
+      }
+    }
+
+    if (all_missing) {
+      return true;
+    }
+
+    std::this_thread::sleep_for(std::chrono::milliseconds(50));
+  }
+  return false;
+}
+
 bool WaitForNodeFieldAtLeast(const std::shared_ptr<RaftNode>& node,
                              const std::string& field_name,
                              std::uint64_t minimum,
@@ -531,6 +567,70 @@ TEST_F(RaftSnapshotCatchupTest, RestartedFollowerCatchesUpLargeGapWithBatchedApp
                                       "last_applied", 320,
                                       std::chrono::seconds(10)))
       << "restarted follower last_applied did not advance enough, describe="
+      << cluster.Nodes()[stopped_follower]->Describe();
+}
+
+TEST_F(RaftSnapshotCatchupTest,
+       LaggingFollowerReplaysLiveLogWithoutBreakingCommittedDeleteOrdering) {
+  auto cluster = MakeCluster("live_log_replay_ordering", false, 1000000);
+  cluster.Start();
+
+  auto leader = WaitForSingleLeader(cluster.Nodes(), std::chrono::seconds(8));
+  ASSERT_NE(leader, nullptr) << "no leader elected";
+
+  const std::size_t stopped_follower = PickFollowerIndex(cluster.Nodes(), leader);
+  ASSERT_LT(stopped_follower, cluster.Nodes().size()) << "failed to pick follower";
+  cluster.StopNode(stopped_follower);
+
+  const std::vector<std::size_t> excluded{stopped_follower};
+  WriteManyValues(cluster.Nodes(), "live_gap", 96, excluded);
+
+  ProposeResult result;
+  ASSERT_TRUE(ProposeWithRetry(cluster.Nodes(), SetCommand("live_ordering", "phase_1"),
+                               std::chrono::seconds(10), &result, excluded))
+      << "live ordering phase_1 failed, status=" << ProposeStatusName(result.status)
+      << ", message=" << result.message;
+  ASSERT_TRUE(ProposeWithRetry(cluster.Nodes(), SetCommand("live_ordering", "phase_2"),
+                               std::chrono::seconds(10), &result, excluded))
+      << "live ordering phase_2 failed, status=" << ProposeStatusName(result.status)
+      << ", message=" << result.message;
+  ASSERT_TRUE(ProposeWithRetry(cluster.Nodes(), DeleteCommand("live_ordering"),
+                               std::chrono::seconds(10), &result, excluded))
+      << "live ordering delete failed, status=" << ProposeStatusName(result.status)
+      << ", message=" << result.message;
+  ASSERT_TRUE(ProposeWithRetry(cluster.Nodes(), SetCommand("live_tail", "committed"),
+                               std::chrono::seconds(10), &result, excluded))
+      << "live tail write failed, status=" << ProposeStatusName(result.status)
+      << ", message=" << result.message;
+
+  ASSERT_TRUE(WaitForValueOnAll(cluster.Nodes(), "live_gap_95", "value_95",
+                                std::chrono::seconds(10), excluded))
+      << "surviving majority did not apply the last live gap value";
+  ASSERT_TRUE(WaitForMissingOnAll(cluster.Nodes(), "live_ordering",
+                                  std::chrono::seconds(10), excluded))
+      << "surviving majority did not preserve committed delete ordering";
+  ASSERT_TRUE(WaitForValueOnAll(cluster.Nodes(), "live_tail", "committed",
+                                std::chrono::seconds(10), excluded))
+      << "surviving majority did not apply tail value after delete";
+
+  cluster.RestartNode(stopped_follower);
+
+  ASSERT_TRUE(WaitForValueOnNode(cluster.Nodes()[stopped_follower],
+                                 "live_gap_95", "value_95",
+                                 std::chrono::seconds(30)))
+      << "lagging follower did not replay live log gap, describe="
+      << cluster.Nodes()[stopped_follower]->Describe();
+  ASSERT_TRUE(WaitForMissingOnAll(cluster.Nodes(), "live_ordering",
+                                  std::chrono::seconds(20)))
+      << "cluster did not preserve committed delete ordering after live log catch-up";
+  ASSERT_TRUE(WaitForValueOnAll(cluster.Nodes(), "live_tail", "committed",
+                                std::chrono::seconds(20)))
+      << "cluster did not converge on committed tail value after live log catch-up";
+
+  const auto follower_snapshot_index =
+      ExtractUintField(cluster.Nodes()[stopped_follower]->Describe(), "last_snapshot_index");
+  EXPECT_TRUE(!follower_snapshot_index.has_value() || *follower_snapshot_index == 0)
+      << "live log catch-up unexpectedly required snapshot handoff, describe="
       << cluster.Nodes()[stopped_follower]->Describe();
 }
 

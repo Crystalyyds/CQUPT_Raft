@@ -52,6 +52,38 @@ namespace raftdemo
       return text.find(needle) != std::string::npos;
     }
 
+    std::optional<std::uint64_t> ExtractUintField(const std::string &describe,
+                                                  const std::string &field_name)
+    {
+      const std::string prefix = field_name + "=";
+      const std::size_t begin = describe.find(prefix);
+      if (begin == std::string::npos)
+      {
+        return std::nullopt;
+      }
+
+      std::size_t pos = begin + prefix.size();
+      std::size_t end = pos;
+      while (end < describe.size() && describe[end] >= '0' && describe[end] <= '9')
+      {
+        ++end;
+      }
+
+      if (end == pos)
+      {
+        return std::nullopt;
+      }
+
+      try
+      {
+        return static_cast<std::uint64_t>(std::stoull(describe.substr(pos, end - pos)));
+      }
+      catch (...)
+      {
+        return std::nullopt;
+      }
+    }
+
     bool IsLeaderNode(const std::shared_ptr<RaftNode> &node)
     {
       return node && Contains(node->Describe(), "role=Leader");
@@ -257,6 +289,27 @@ namespace raftdemo
         }
       }
 
+      void RestartNode(std::size_t index)
+      {
+        ASSERT_LT(index, configs_.size());
+        StopNode(index);
+
+        if (nodes_.size() < configs_.size())
+        {
+          nodes_.resize(configs_.size());
+        }
+        if (wait_threads_.size() < configs_.size())
+        {
+          wait_threads_.resize(configs_.size());
+        }
+
+        nodes_[index] = std::make_shared<RaftNode>(configs_[index], snapshot_configs_[index]);
+        nodes_[index]->Start();
+        const auto node = nodes_[index];
+        wait_threads_[index] = std::thread([node]()
+                                           { node->Wait(); });
+      }
+
       const std::vector<std::shared_ptr<RaftNode>> &Nodes() const { return nodes_; }
 
     private:
@@ -380,6 +433,29 @@ namespace raftdemo
 
         std::this_thread::sleep_for(std::chrono::milliseconds(50));
       }
+      return false;
+    }
+
+    bool WaitForNodeFieldAtLeast(const std::shared_ptr<RaftNode> &node,
+                                 const std::string &field_name,
+                                 std::uint64_t minimum,
+                                 std::chrono::milliseconds timeout)
+    {
+      const auto deadline = Clock::now() + timeout;
+      while (Clock::now() < deadline)
+      {
+        if (node)
+        {
+          const auto value = ExtractUintField(node->Describe(), field_name);
+          if (value.has_value() && *value >= minimum)
+          {
+            return true;
+          }
+        }
+
+        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+      }
+
       return false;
     }
 
@@ -631,6 +707,100 @@ namespace raftdemo
       }
 
       FAIL() << "no snapshot meta file generated within timeout";
+    }
+
+    TEST_F(RaftIntegrationTest,
+           LaggingFollowerInstallsSnapshotAndReplaysTailDeleteAcrossCompactionBoundary)
+    {
+      auto cluster = MakeCluster("snapshot_boundary", "snapshot_boundary");
+      cluster.Start();
+
+      auto leader = WaitForSingleLeader(cluster.Nodes(), std::chrono::seconds(8));
+      ASSERT_NE(leader, nullptr) << "no leader elected";
+
+      std::size_t leader_index = cluster.Nodes().size();
+      for (std::size_t i = 0; i < cluster.Nodes().size(); ++i)
+      {
+        if (cluster.Nodes()[i] == leader)
+        {
+          leader_index = i;
+          break;
+        }
+      }
+      ASSERT_LT(leader_index, cluster.Nodes().size()) << "failed to locate leader index";
+
+      std::size_t stopped_follower = cluster.Nodes().size();
+      for (std::size_t i = 0; i < cluster.Nodes().size(); ++i)
+      {
+        if (i != leader_index && cluster.Nodes()[i])
+        {
+          stopped_follower = i;
+          break;
+        }
+      }
+      ASSERT_LT(stopped_follower, cluster.Nodes().size()) << "failed to pick follower";
+      cluster.StopNode(stopped_follower);
+
+      const std::vector<std::size_t> excluded{stopped_follower};
+      ProposeResult result;
+      ASSERT_TRUE(ProposeWithRetry(cluster.Nodes(), SetCommand("boundary_key", "before_snapshot"),
+                                   std::chrono::seconds(10), &result, excluded))
+          << "boundary seed write failed, status=" << ProposeStatusName(result.status)
+          << ", message=" << result.message;
+
+      for (int i = 0; i < 18; ++i)
+      {
+        SCOPED_TRACE("snapshot boundary fill " + std::to_string(i));
+        ASSERT_TRUE(
+            ProposeWithRetry(cluster.Nodes(),
+                             SetCommand("boundary_fill_" + std::to_string(i),
+                                        "value_" + std::to_string(i)),
+                             std::chrono::seconds(10), &result, excluded))
+            << "boundary fill failed, status=" << ProposeStatusName(result.status)
+            << ", message=" << result.message;
+      }
+
+      ASSERT_TRUE(WaitForNodeFieldAtLeast(cluster.Nodes()[leader_index],
+                                          "last_snapshot_index", 4,
+                                          std::chrono::seconds(20)))
+          << "leader did not compact logs before follower restart, describe="
+          << cluster.Nodes()[leader_index]->Describe();
+
+      const auto leader_snapshot_index =
+          ExtractUintField(cluster.Nodes()[leader_index]->Describe(), "last_snapshot_index");
+      ASSERT_TRUE(leader_snapshot_index.has_value())
+          << "leader snapshot index missing from describe output";
+
+      ASSERT_TRUE(ProposeWithRetry(cluster.Nodes(), DeleteCommand("boundary_key"),
+                                   std::chrono::seconds(10), &result, excluded))
+          << "boundary delete failed, status=" << ProposeStatusName(result.status)
+          << ", message=" << result.message;
+      ASSERT_TRUE(ProposeWithRetry(cluster.Nodes(), SetCommand("boundary_tail", "committed"),
+                                   std::chrono::seconds(10), &result, excluded))
+          << "boundary tail write failed, status=" << ProposeStatusName(result.status)
+          << ", message=" << result.message;
+
+      ASSERT_TRUE(WaitForMissingOnAll(cluster.Nodes(), "boundary_key",
+                                      std::chrono::seconds(10), excluded))
+          << "surviving majority did not preserve delete after compaction";
+      ASSERT_TRUE(WaitForValueOnAll(cluster.Nodes(), "boundary_tail", "committed",
+                                    std::chrono::seconds(10), excluded))
+          << "surviving majority did not apply tail entry after compaction";
+
+      cluster.RestartNode(stopped_follower);
+
+      ASSERT_TRUE(WaitForNodeFieldAtLeast(cluster.Nodes()[stopped_follower],
+                                          "last_snapshot_index",
+                                          *leader_snapshot_index,
+                                          std::chrono::seconds(30)))
+          << "lagging follower did not install retained snapshot before tail replay, describe="
+          << cluster.Nodes()[stopped_follower]->Describe();
+      ASSERT_TRUE(WaitForValueOnAll(cluster.Nodes(), "boundary_tail", "committed",
+                                    std::chrono::seconds(20)))
+          << "cluster did not converge on committed tail value after snapshot handoff";
+      ASSERT_TRUE(WaitForMissingOnAll(cluster.Nodes(), "boundary_key",
+                                      std::chrono::seconds(20)))
+          << "cluster did not preserve committed delete ordering across snapshot boundary";
     }
 
   } // namespace
