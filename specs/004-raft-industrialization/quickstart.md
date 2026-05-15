@@ -15,9 +15,8 @@ Linux-specific 边界，都以它为准。
    哪些属于后续补强，哪些是 Linux-specific，哪些仍是 Windows/macOS deferred。
 2. 使用 Linux 主入口完成低并发构建和主回归。
 3. 若某个高风险区域失败，按矩阵中的 focused rerun 命令进入对应分组。
-4. 若当前环境是 Windows，使用 `cmake --preset windows`、
-   `cmake --build --preset windows-release` 和 `ctest --preset windows-tests`
-   完成 platform-neutral fallback。
+4. 若当前环境是 Windows，优先使用 `.\test.ps1 -All` 完成 PowerShell
+   platform-neutral fallback。
 5. 若不在 Linux 上且不适用 Windows preset，或只需要跑平台无关基线，使用
    `ctest --preset debug-tests` 作为 fallback。
 
@@ -106,17 +105,24 @@ ctest --preset debug-tests --output-on-failure
 如果当前环境是 Windows，优先使用：
 
 ```bash
+.\test.ps1 -All
+```
+
+解释规则：
+
+- `test.ps1` 是 Windows PowerShell fallback wrapper。
+- `windows` configure preset 保持现有 Visual Studio 17 2022 multi-config 配置不变。
+- `windows-release` 只补齐 Release 构建入口，使用低并发 `jobs: 2`。
+- `windows-tests` 只代表 platform-neutral fallback，使用 `configuration: Release`、
+  `execution.jobs: 1` 和 `outputOnFailure: true`。
+- `.\test.ps1 -All` 的底层等价流程仍然是：
+
+```bash
 cmake --preset windows
 cmake --build --preset windows-release
 ctest --preset windows-tests
 ```
 
-解释规则：
-
-- `windows` configure preset 保持现有 Visual Studio 17 2022 multi-config 配置不变。
-- `windows-release` 只补齐 Release 构建入口，使用低并发 `jobs: 2`。
-- `windows-tests` 只代表 platform-neutral fallback，使用 `configuration: Release`、
-  `execution.jobs: 1` 和 `outputOnFailure: true`。
 - 这组命令不等价于 Linux-specific crash-style、failure-injection、
   directory sync 或 `--keep-data` 证据。
 
@@ -141,9 +147,7 @@ ctest --preset windows-tests
 - Windows 至少能使用 preset-based fallback：
 
 ```bash
-cmake --preset windows
-cmake --build --preset windows-release
-ctest --preset windows-tests
+.\test.ps1 -All
 ```
 
 - 其他非 Bash 环境至少能理解并使用平台无关 fallback：

@@ -386,7 +386,7 @@
   Basis: 现状分析中的 `CMakeLists.txt` Windows 硬编码风险；`plan.md` W6/W8。
   Tests To Run: `cmake --preset debug-ninja-low-parallel`; `cmake --build --preset debug-ninja-low-parallel`; `ctest --preset debug-tests --output-on-failure`.
 
-- [ ] T025 [P] [US3] Add non-Bash fallback runner in `test.ps1`
+- [x] T025 [P] [US3] Add non-Bash fallback runner in `test.ps1`
   Goal: 提供 Windows/macOS 规划可参考的非 Bash 测试入口，至少覆盖平台无关的 CMake/CTest 流程。
   Input: `test.sh`, `CMakePresets.json`, `contracts/validation-entrypoints.md`, `validation-matrix.md`.
   Scope: 新增 `test.ps1`；必要时更新相关文档。

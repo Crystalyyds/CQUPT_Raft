@@ -40,7 +40,7 @@ cross-platform gaps are scheduled for follow-up work.
 | P1 | Catch-up after lag, compaction, restart, and snapshot handoff | Implemented but needs stronger proof | `plan.md` W4, current gap classification `B/C` | `./test.sh --group snapshot-catchup`, `integration`, `replicator` | No | Same tests should remain runnable via CTest |
 | P1 | Leader switch and commit/apply ordering under churn | Implemented but still risky | `plan.md` W4, current gap classification `B/C` | `./test.sh --group replication`, `election`, `replicator` | No | Same tests should remain runnable via CTest |
 | P1 | State-machine apply/replay consistency after snapshot/restart | Implemented but needs stronger proof | `plan.md` W5 | `./test.sh --group snapshot-recovery`, targeted `ctest -R` on state machine and integration tests | No | Same tests should remain runnable via CTest |
-| P2 | Unified validation entrypoints and grouped test guidance | Windows preset-based fallback added; Bash wrapper follow-up still incomplete | Current `test.sh`, `CMakePresets.json`, `plan.md` W6 | `./test.sh --group all`, `ctest --preset debug-tests`, `ctest --preset windows-tests` | Partially | PowerShell or documented non-Bash fallback required |
+| P2 | Unified validation entrypoints and grouped test guidance | Windows preset-based fallback and PowerShell wrapper added | Current `test.sh`, `test.ps1`, `CMakePresets.json`, `plan.md` W6 | `./test.sh --group all`, `.\test.ps1 -All`, `ctest --preset debug-tests`, `ctest --preset windows-tests` | Partially | PowerShell fallback is now available; Linux-specific runtime evidence still requires explicit boundary notes |
 | P3 | Failure localization and platform-support documentation | Incomplete | `plan.md` W7/W8 | Spec docs and grouped rerun commands | Partially | Explicit support matrix and follow-up notes required |
 | P4 | Windows/macOS deeper runtime validation and CI expansion | Deferred follow-up | `spec.md` platform scope, `plan.md` W8 | Future runtime validation | No | This row is itself the fallback and follow-up definition |
 
@@ -64,6 +64,7 @@ cross-platform gaps are scheduled for follow-up work.
 | `cmake --preset windows` | Windows configure fallback | Windows platform-neutral baseline setup | No | No | Existing Visual Studio 17 2022 configure preset remains unchanged |
 | `cmake --build --preset windows-release` | Windows low-parallel build fallback | Windows platform-neutral baseline build | No | No | Uses `configurePreset: windows`, `configuration: Release`, `jobs: 2` |
 | `ctest --preset windows-tests` | Windows low-parallel test fallback | Windows platform-neutral baseline execution | No | No | Uses `configuration: Release`, `execution.jobs: 1`, `outputOnFailure: true`; does not claim Linux-specific runtime equivalence |
+| `.\test.ps1 -All` | Windows PowerShell fallback wrapper | Windows platform-neutral one-command validation | No | No | Wraps `windows` / `windows-release` / `windows-tests`; does not run Linux-specific groups |
 | `CTEST_PARALLEL_LEVEL=1 ./test.sh --group all` | Primary regression sweep | Linux primary validation | Partially | Optional via `--keep-data` | Includes grouped Linux execution flow |
 | `./test.sh --group persistence` | Focused restart/durability rerun | Industrialization hotspot | Partially | Optional via `--keep-data` | Main trusted-state regression bucket |
 | `./test.sh --group snapshot-recovery` | Focused snapshot/restart rerun | Industrialization hotspot | Partially | Optional via `--keep-data` | Current flaky blocker area |
@@ -110,9 +111,10 @@ Notes:
   with `--keep-data` added only when retained artifacts are needed.
 - For Windows/macOS, the fallback entry remains
   `ctest --preset debug-tests --output-on-failure` or the corresponding direct
-  `ctest --test-dir build ... -R ...` command. These fallbacks provide logic
-  regression only and do not claim Linux-equivalent retained-artifact or
-  crash-style runtime evidence.
+  `ctest --test-dir build ... -R ...` command. On Windows, `.\test.ps1 -All`
+  is the preferred one-command wrapper for the existing preset-based fallback.
+  These fallbacks provide logic regression only and do not claim
+  Linux-equivalent retained-artifact or crash-style runtime evidence.
 - The rerun groups above are not a replacement for the full Linux primary path;
   they exist to narrow failures after a grouped run or a targeted investigation.
 

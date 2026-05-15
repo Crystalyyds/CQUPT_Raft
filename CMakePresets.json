@@ -62,7 +62,7 @@
             "displayName": "Visual Studio Community 2022 Release - amd64 - Release",
             "configurePreset": "windows",
             "configuration": "Release",
-            "jobs": 2
+            "jobs": 4
         }
     ],
     "testPresets": [
@@ -80,7 +80,7 @@
             "configurePreset": "windows",
             "configuration": "Release",
             "execution": {
-                "jobs": 1
+                "jobs": 4
             },
             "output": {
                 "outputOnFailure": true

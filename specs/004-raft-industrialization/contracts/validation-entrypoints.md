@@ -21,6 +21,7 @@
     `Linux primary` 定义一致。
   - 它可以承载 Linux-specific 分组、低并发回归和 `--keep-data` 现场保留。
   - 它不能被当作非 Linux 平台唯一入口。
+  - Windows PowerShell fallback 不能替代它的 Linux-primary 含义。
 
 ### 2. 平台无关 CTest fallback
 
@@ -52,15 +53,27 @@
     都必须继续标注为 Linux-primary 或 deferred，不能因为
     `windows-tests` 可运行就视为 Windows 已具备等价运行时证据。
 
-### 4. Windows/macOS wrapper follow-up
+### 4. Windows PowerShell fallback wrapper
 
 - **当前状态**：
-  - `test.ps1` 或等价 wrapper 仍未落地
+  - Windows PowerShell fallback 已提供：
+    - `.\test.ps1 -All`
 - **约定**：
-  - T024 只补齐 preset-based fallback，不进入 PowerShell wrapper 范围。
-  - 在正式 wrapper 出现前，Windows 应使用上述 `windows` /
-    `windows-release` / `windows-tests` 入口；其他非 Bash 环境继续以
-    已有 CMake/CTest 命令作为逻辑回归 fallback。
+  - `test.ps1` 是 Windows 用户的推荐一键 fallback 入口。
+  - 它只封装以下 platform-neutral 流程：
+    - `cmake --preset windows`
+    - `cmake --build --preset windows-release`
+    - `ctest --preset windows-tests`
+  - 它不调用 Bash，不执行 Linux-specific 分组，也不声称提供与
+    `./test.sh --keep-data` 等价的 retained-artifact 诊断能力。
+
+### 5. Windows/macOS wrapper follow-up
+
+- **当前状态**：
+  - `test.ps1` 已作为 Windows fallback 落地
+- **约定**：
+  - T025 已补齐 Windows PowerShell wrapper。
+  - 其他非 Bash 环境继续以已有 CMake/CTest 命令作为逻辑回归 fallback。
 
 ## 验证顺序约定
 
@@ -73,9 +86,9 @@
    `cmake --build --preset debug-ninja-low-parallel` 完成低并发构建。
 3. 使用 `CTEST_PARALLEL_LEVEL=1 ./test.sh --group all` 作为 Linux 主回归入口。
 4. 如果出现高风险失败，按分组 rerun 命令进入 focused regression。
-5. 如果当前环境是 Windows，使用 `cmake --preset windows`、
-   `cmake --build --preset windows-release` 和 `ctest --preset windows-tests`
-   作为 platform-neutral fallback。
+5. 如果当前环境是 Windows，优先使用 `.\test.ps1 -All` 作为 PowerShell
+   fallback；其底层固定调用 `windows`、`windows-release`、
+   `windows-tests` preset。
 6. 如果当前环境不走 Bash 主入口且不适用 Windows preset，则使用
    `ctest --preset debug-tests --output-on-failure` 作为平台无关 fallback。
 
@@ -196,13 +209,14 @@
 - 当前文档化 fallback 入口仍是：
   - `ctest --preset debug-tests --output-on-failure`
 - Windows 当前额外具备 preset-based fallback：
+  - `.\test.ps1 -All`
   - `cmake --preset windows`
   - `cmake --build --preset windows-release`
   - `ctest --preset windows-tests`
 - 若需要更细粒度重跑，可使用与 `test.sh` 对应的直接 `ctest --test-dir build -R`
   命令，但解释范围仍属于 platform-neutral logic fallback。
-- 在 `test.ps1` 或等价 wrapper 尚未落地前，不得把非 Bash fallback 描述成
-  与 Linux Bash 主入口完全等价。
+- `test.ps1` 只是 Windows wrapper，不得把它描述成与 Linux Bash 主入口
+  完全等价。
 
 ## 非目标
 
