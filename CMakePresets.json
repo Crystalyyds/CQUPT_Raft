@@ -5,7 +5,7 @@
             "name": "debug-ninja-low-parallel",
             "displayName": "Debug Ninja low parallel",
             "generator": "Ninja",
-            "binaryDir": "${sourceDir}/build",
+            "binaryDir": "${sourceDir}/build/linux",
             "cacheVariables": {
                 "CMAKE_BUILD_TYPE": "Debug",
                 "RAFT_BUILD_JOBS": "2",
@@ -17,7 +17,7 @@
             "name": "debug-ninja-safe",
             "displayName": "Debug Ninja safe single job",
             "generator": "Ninja",
-            "binaryDir": "${sourceDir}/build",
+            "binaryDir": "${sourceDir}/build/linux/safe",
             "cacheVariables": {
                 "CMAKE_BUILD_TYPE": "Debug",
                 "RAFT_BUILD_JOBS": "1",
@@ -55,7 +55,8 @@
             "name": "windows-debug",
             "displayName": "Visual Studio Community 2022 Release - amd64 - Debug",
             "configurePreset": "windows",
-            "configuration": "Debug"
+            "configuration": "Debug",
+            "jobs": 4
         },
         {
             "name": "windows-release",
@@ -75,7 +76,19 @@
             }
         },
         {
-            "name": "windows-tests",
+            "name": "windows-debug-tests",
+            "displayName": "Run Windows Debug tests",
+            "configurePreset": "windows",
+            "configuration": "Debug",
+            "execution": {
+                "jobs": 4
+            },
+            "output": {
+                "outputOnFailure": true
+            }
+        },
+        {
+            "name": "windows-release-tests",
             "displayName": "Run Windows Release tests",
             "configurePreset": "windows",
             "configuration": "Release",
