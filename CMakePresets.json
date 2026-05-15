@@ -8,6 +8,8 @@
             "binaryDir": "${sourceDir}/build/linux",
             "cacheVariables": {
                 "CMAKE_BUILD_TYPE": "Debug",
+                "CMAKE_TOOLCHAIN_FILE": "$env{VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake",
+                "VCPKG_TARGET_TRIPLET": "x64-linux",
                 "RAFT_BUILD_JOBS": "2",
                 "RAFT_LINK_JOBS": "1",
                 "RAFT_PROTO_JOBS": "1"
@@ -20,6 +22,8 @@
             "binaryDir": "${sourceDir}/build/linux/safe",
             "cacheVariables": {
                 "CMAKE_BUILD_TYPE": "Debug",
+                "CMAKE_TOOLCHAIN_FILE": "$env{VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake",
+                "VCPKG_TARGET_TRIPLET": "x64-linux",
                 "RAFT_BUILD_JOBS": "1",
                 "RAFT_LINK_JOBS": "1",
                 "RAFT_PROTO_JOBS": "1"

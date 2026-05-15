@@ -1,13 +1,21 @@
 cmake_minimum_required(VERSION 3.20)
 
-if(WIN32)
-  if(NOT DEFINED CMAKE_TOOLCHAIN_FILE)
+if(NOT DEFINED CMAKE_TOOLCHAIN_FILE)
+  if(WIN32)
     set(CMAKE_TOOLCHAIN_FILE "D:/Tools/vcpkg/scripts/buildsystems/vcpkg.cmake"
         CACHE STRING "Vcpkg toolchain file")
+  elseif(DEFINED ENV{VCPKG_ROOT} AND EXISTS "$ENV{VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake")
+    set(CMAKE_TOOLCHAIN_FILE "$ENV{VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake"
+        CACHE STRING "Vcpkg toolchain file")
   endif()
+endif()
 
-  if(NOT DEFINED VCPKG_TARGET_TRIPLET)
+if(NOT DEFINED VCPKG_TARGET_TRIPLET)
+  if(WIN32)
     set(VCPKG_TARGET_TRIPLET "x64-windows"
+        CACHE STRING "Vcpkg target triplet")
+  elseif(DEFINED ENV{VCPKG_ROOT})
+    set(VCPKG_TARGET_TRIPLET "x64-linux"
         CACHE STRING "Vcpkg target triplet")
   endif()
 endif()
