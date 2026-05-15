@@ -3,19 +3,23 @@ set -Eeuo pipefail
 
 # Run Raft project tests in a stable, grouped order.
 #
-# Low-concurrency recommendation:
-#   CTEST_PARALLEL_LEVEL=1 ./test.sh --group snapshot-recovery
+# test.sh section map:
+#   Platform-neutral base regression groups:
+#     unit snapshot-storage kv-service segment-basic election replication
+#     integration snapshot-catchup snapshot-restart replicator
+#   Shared restart / durability regression:
+#     persistence
+#   Linux-specific / Linux-primary focus groups:
+#     snapshot-recovery diagnosis segment-cluster
+#   Linux Bash primary sweep:
+#     all
 #
-# Keep-data recommendation:
-#   Use --keep-data for Linux-primary reruns when you need to retain
+# --keep-data:
+#   Linux Bash-first retained-artifact mode for reruns that need
 #   raft_data / raft_snapshots / build/tests/raft_test_data for diagnosis.
 #
-# High-risk rerun groups:
-#   snapshot-recovery  snapshot / restart recovery hotspot
-#   diagnosis          recovery diagnostics and snapshot fallback hotspot
-#   snapshot-catchup   follower catch-up and snapshot handoff
-#   replicator         single follower replication behavior
-#   segment-cluster    segment / snapshot stress path under clustered load
+# Non-Bash / cross-platform fallback:
+#   ctest --preset debug-tests --output-on-failure
 
 PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 BUILD_DIR="${PROJECT_ROOT}/build"
@@ -42,41 +46,51 @@ Usage:
   ./test.sh --group persistence
   ./test.sh --group all
 
-Low-concurrency recommendation:
-  CTEST_PARALLEL_LEVEL=1 ./test.sh --group snapshot-recovery
-  CTEST_PARALLEL_LEVEL=1 ./test.sh --group diagnosis --keep-data
-
---keep-data:
-  Keep Linux test artifacts under raft_data / raft_snapshots /
-  build/tests/raft_test_data for failure diagnosis.
-  Use it when investigating restart, snapshot, catch-up, replicator, or
-  segment-cluster failures. This is a Linux Bash-first workflow.
-
-Groups:
+Platform-neutral base regression groups:
   unit               Basic unit tests for commands, scheduler, and thread pool
   snapshot-storage   Snapshot storage reliability coverage
   kv-service         KV service redirect and read/write behavior
   segment-basic      Focused segment storage persistence cases
   election           Leader election and split-brain related checks
   replication        Log replication and commit/apply progression
-  persistence        Restart recovery and hard-state/log trusted-state checks
-  snapshot-recovery  Snapshot/restart recovery hotspot (Linux primary)
   integration        Multi-node Raft integration scenarios
   snapshot-catchup   Lagging follower catch-up and snapshot handoff
   snapshot-restart   Restart after compacted snapshot scenarios
-  diagnosis          Recovery diagnosis and snapshot fallback hotspot (Linux primary)
   replicator         Single follower replication and catch-up behavior
+
+Shared restart / durability regression:
+  persistence        Restart recovery and hard-state/log trusted-state checks
+                     Recovery logic is platform-neutral; Linux-specific durability
+                     interpretation remains documented separately.
+
+Linux-specific / Linux-primary focus groups:
+  snapshot-recovery  Snapshot/restart recovery hotspot
+  diagnosis          Recovery diagnosis and snapshot fallback hotspot
   segment-cluster    Clustered segment/snapshot stress path
-  all                Grouped Linux primary sweep followed by full-suite check
 
-High-risk rerun commands:
-  CTEST_PARALLEL_LEVEL=1 ./test.sh --group snapshot-recovery --keep-data
-  CTEST_PARALLEL_LEVEL=1 ./test.sh --group diagnosis --keep-data
-  CTEST_PARALLEL_LEVEL=1 ./test.sh --group snapshot-catchup --keep-data
-  CTEST_PARALLEL_LEVEL=1 ./test.sh --group replicator --keep-data
-  CTEST_PARALLEL_LEVEL=1 ./test.sh --group segment-cluster --keep-data
+Linux Bash primary sweep:
+  all                Runs platform-neutral base regression groups first,
+                     then persistence, then Linux-specific / Linux-primary
+                     focus groups, followed by a final full-suite check.
 
-Platform-neutral fallback:
+--keep-data:
+  Keep Linux test artifacts under raft_data / raft_snapshots /
+  build/tests/raft_test_data for failure diagnosis.
+  Use it when investigating restart, snapshot, catch-up, replicator, or
+  segment-cluster failures. This is a Linux Bash-first workflow and is not
+  replaced by the non-Bash fallback.
+
+Failure rerun guide:
+  Re-run the failed group with CTEST_PARALLEL_LEVEL=1.
+  Add --keep-data when retained artifacts are required for diagnosis.
+  High-risk rerun commands:
+    CTEST_PARALLEL_LEVEL=1 ./test.sh --group snapshot-recovery --keep-data
+    CTEST_PARALLEL_LEVEL=1 ./test.sh --group diagnosis --keep-data
+    CTEST_PARALLEL_LEVEL=1 ./test.sh --group snapshot-catchup --keep-data
+    CTEST_PARALLEL_LEVEL=1 ./test.sh --group replicator --keep-data
+    CTEST_PARALLEL_LEVEL=1 ./test.sh --group segment-cluster --keep-data
+
+Non-Bash / cross-platform fallback:
   ctest --preset debug-tests --output-on-failure
 EOF
 }
@@ -128,8 +142,62 @@ log_section() {
   echo "============================================================"
 }
 
+print_group_catalog() {
+  cat <<'EOF'
+Platform-neutral base regression groups:
+  unit snapshot-storage kv-service segment-basic election replication
+  integration snapshot-catchup snapshot-restart replicator
+
+Shared restart / durability regression:
+  persistence
+  Recovery logic is platform-neutral; Linux-specific durability interpretation
+  remains documented separately.
+
+Linux-specific / Linux-primary focus groups:
+  snapshot-recovery diagnosis segment-cluster
+
+Linux Bash primary sweep:
+  all = platform-neutral base regression groups + persistence +
+        Linux-specific / Linux-primary focus groups + final full-suite check
+
+--keep-data:
+  Linux Bash-first retained-artifact mode for raft_data / raft_snapshots /
+  build/tests/raft_test_data.
+
+Failure rerun guide:
+  Re-run the failed group with CTEST_PARALLEL_LEVEL=1.
+  Add --keep-data when retained artifacts are needed for diagnosis.
+
+Non-Bash / cross-platform fallback:
+  ctest --preset debug-tests --output-on-failure
+EOF
+}
+
+print_group_classification() {
+  local group="$1"
+
+  case "${group}" in
+    unit|snapshot-storage|kv-service|segment-basic|election|replication|integration|snapshot-catchup|snapshot-restart|replicator)
+      echo "Section: platform-neutral base regression."
+      ;;
+    persistence)
+      echo "Section: shared restart / durability regression."
+      echo "Note: recovery logic is platform-neutral; Linux-specific durability interpretation remains separate."
+      ;;
+    snapshot-recovery|diagnosis|segment-cluster)
+      echo "Section: Linux-specific / Linux-primary focus group."
+      ;;
+    all)
+      echo "Section: Linux Bash primary sweep."
+      echo "Order: platform-neutral base regression -> persistence -> Linux-specific / Linux-primary focus groups -> final full-suite check."
+      ;;
+  esac
+}
+
 print_group_guidance() {
   local group="$1"
+
+  print_group_classification "${group}"
 
   case "${group}" in
     snapshot-recovery)
@@ -335,6 +403,9 @@ fi
 if [[ "${DO_BUILD}" -eq 1 ]]; then
   build_project
 fi
+
+log_section "test.sh section map"
+print_group_catalog
 
 run_group_by_name "${SELECTED_GROUP}"
 

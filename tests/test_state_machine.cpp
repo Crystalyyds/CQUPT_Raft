@@ -79,5 +79,32 @@ TEST(KvStateMachineTest, DebugStringShowsSortedKeys) {
   EXPECT_EQ(sm.DebugString(), "{a=1, b=2, c=3}");
 }
 
+TEST(KvStateMachineTest, ReplayStyleOverwriteAndDeleteLeaveExpectedFinalView) {
+  KvStateMachine sm;
+
+  ASSERT_TRUE(sm.Apply(1, MakeSet("snapshot_only", "base").Serialize()).Ok);
+  ASSERT_TRUE(sm.Apply(2, MakeSet("tail_overwrite", "before").Serialize()).Ok);
+  ASSERT_TRUE(sm.Apply(3, MakeSet("tail_delete", "present").Serialize()).Ok);
+
+  ASSERT_TRUE(sm.Apply(4, MakeSet("tail_overwrite", "after").Serialize()).Ok);
+  ASSERT_TRUE(sm.Apply(5, MakeDelete("tail_delete").Serialize()).Ok);
+  ASSERT_TRUE(sm.Apply(6, MakeSet("tail_only", "replayed").Serialize()).Ok);
+
+  std::string value;
+  EXPECT_TRUE(sm.Get("snapshot_only", &value));
+  EXPECT_EQ(value, "base");
+
+  EXPECT_TRUE(sm.Get("tail_overwrite", &value));
+  EXPECT_EQ(value, "after");
+
+  EXPECT_FALSE(sm.Get("tail_delete", &value));
+
+  EXPECT_TRUE(sm.Get("tail_only", &value));
+  EXPECT_EQ(value, "replayed");
+
+  EXPECT_EQ(sm.DebugString(),
+            "{snapshot_only=base, tail_only=replayed, tail_overwrite=after}");
+}
+
 }  // namespace
 }  // namespace raftdemo

@@ -228,7 +228,8 @@
   Basis: `plan.md` W3；constitution II/III；`spec.md` FR-010。
   Tests To Run: T012/T013 相关测试；`./test.sh --group persistence`; `./test.sh --group snapshot-recovery`; `./test.sh --group diagnosis`.
 
-- [ ] T015 [US1] Update `specs/004-raft-industrialization/validation-matrix.md` with accepted US1 evidence
+
+- [x] T015 [US1] Update `specs/004-raft-industrialization/validation-matrix.md` with accepted US1 evidence
   Goal: 把 Linux-specific durability 注入证据、平台无关恢复证据和 deferred Windows/macOS 范围正式记录下来。
   Input: T006-T014 results, `validation-matrix.md`, `quickstart.md`.
   Scope: 文档更新。
@@ -252,7 +253,7 @@
 
 ### Tests for User Story 2
 
-- [ ] T016 [P] [US2] Add lagging-follower and compaction catch-up regressions in `tests/test_raft_snapshot_catchup.cpp` and `tests/raft_integration_test.cpp`
+- [x] T016 [P] [US2] Add lagging-follower and compaction catch-up regressions in `tests/test_raft_snapshot_catchup.cpp` and `tests/raft_integration_test.cpp`
   Goal: 覆盖 follower 落后 live log 和 retained snapshot boundary 两类 catch-up 场景。
   Input: `tests/test_raft_snapshot_catchup.cpp`, `tests/raft_integration_test.cpp`, `plan.md`, `validation-matrix.md`.
   Scope: 只改测试文件。
@@ -265,11 +266,11 @@
   Basis: `plan.md` W4；`spec.md` FR-004；现状分析中 follower catch-up 仍属需补强区域。
   Tests To Run: `./test.sh --group snapshot-catchup`; `./test.sh --group integration`.
 
-- [ ] T017 [P] [US2] Add leader-switch and commit/apply ordering regressions in `tests/test_raft_replicator_behavior.cpp`, `tests/test_raft_log_replication.cpp`, and `tests/test_raft_commit_apply.cpp`
+- [x] T017 [P] [US2] Add leader-switch and commit/apply ordering regressions in `tests/test_raft_replicator_behavior.cpp`, `tests/test_raft_log_replication.cpp`, and `tests/test_raft_commit_apply.cpp`
   Goal: 覆盖 leader 切换后 committed state 保持不变、新日志继续一致推进、commit/apply 不逆序。
   Input: `tests/test_raft_replicator_behavior.cpp`, `tests/test_raft_log_replication.cpp`, `tests/test_raft_commit_apply.cpp`, `spec.md`.
   Scope: 只改测试文件。
-  Acceptance: 测试能在 leader 变化、follower 追赶和新 proposal 混合情况下验证一致性，而不是只验证单一 steady-state 路径。
+  AcceptanceX: 测试能在 leader 变化、follower 追赶和新 proposal 混合情况下验证一致性，而不是只验证单一 steady-state 路径。
   Production Code: No.
   Test Only: Yes.
   Cross-Platform: Yes.
@@ -278,7 +279,7 @@
   Basis: `plan.md` W4；`spec.md` FR-004；US2 acceptance scenarios。
   Tests To Run: `./test.sh --group replication`; `./test.sh --group replicator`.
 
-- [ ] T018 [P] [US2] Add state-machine replay consistency regressions in `tests/test_state_machine.cpp` and `tests/test_raft_snapshot_restart.cpp`
+- [x] T018 [P] [US2] Add state-machine replay consistency regressions in `tests/test_state_machine.cpp` and `tests/test_raft_snapshot_restart.cpp`
   Goal: 覆盖 snapshot load 后 replay、restart 后 apply、state machine 视图一致性边界。
   Input: `tests/test_state_machine.cpp`, `tests/test_raft_snapshot_restart.cpp`, `plan.md`, `data-model.md`.
   Scope: 只改测试文件。
@@ -293,7 +294,7 @@
 
 ### Implementation for User Story 2
 
-- [ ] T019 [US2] Apply minimal catch-up fixes in `modules/raft/replication/replicator.cpp` if T016 reveals real defects
+- [x] T019 [US2] Apply minimal catch-up fixes in `modules/raft/replication/replicator.cpp` if T016 reveals real defects
   Goal: 仅在新回归证明 follower catch-up 边界有缺陷时，最小修复 replicator 的回退、snapshot handoff 或 next-index 推进逻辑。
   Input: T016 failing evidence, `modules/raft/replication/replicator.cpp`, related existing tests.
   Scope: 仅改 `modules/raft/replication/replicator.cpp`。
@@ -305,8 +306,9 @@
   Windows/macOS Fallback: Yes, 修复结果必须通过平台无关测试入口。
   Basis: `plan.md` W4；constitution III；现状分析中的 catch-up industrialization gap。
   Tests To Run: `./test.sh --group snapshot-catchup`; `./test.sh --group replicator`.
+  Execution Note: No-op。T016 的 log replay catch-up 与 snapshot handoff catch-up 回归测试已通过，未发现 `modules/raft/replication/replicator.cpp` 的真实实现缺口；本任务未修改生产代码。
 
-- [ ] T020 [US2] Apply minimal leader-switch or orchestration fixes in `modules/raft/node/raft_node.cpp` if T017 reveals real defects
+- [x] T020 [US2] Apply minimal leader-switch or orchestration fixes in `modules/raft/node/raft_node.cpp` if T017 reveals real defects
   Goal: 在不改变协议语义的前提下，修复 leader 切换、commit/apply 顺序或 restart 后推进边界的真实缺陷。
   Input: T017 failing evidence, `modules/raft/node/raft_node.cpp`, related storage/replication tests.
   Scope: 限定改 `raft_node.cpp`；按 AGENTS 规则同步检查 `replication`、`storage`、`state_machine` 相关测试。
@@ -318,8 +320,9 @@
   Windows/macOS Fallback: Yes.
   Basis: `plan.md` W4；constitution III；`spec.md` US2 acceptance scenario 2。
   Tests To Run: `./test.sh --group replication`; `./test.sh --group election`; `./test.sh --group replicator`.
+  Execution Note: No-op。T017 的 leader-switch / commit-apply ordering 回归测试已通过，未发现 `modules/raft/node/raft_node.cpp` 的真实实现缺口；本任务未修改生产代码。
 
-- [ ] T021 [US2] Apply minimal replay fixes in `modules/raft/state_machine/state_machine.cpp` or `modules/raft/node/raft_node.cpp` if T018 reveals real defects
+- [x] T021 [US2] Apply minimal replay fixes in `modules/raft/state_machine/state_machine.cpp` or `modules/raft/node/raft_node.cpp` if T018 reveals real defects
   Goal: 修复 apply/replay 与 snapshot load 边界上的真实一致性问题，但不修改状态机格式或公共语义。
   Input: T018 failing evidence, `state_machine.cpp`, `raft_node.cpp`, existing snapshot restart tests.
   Scope: 限定在 `state_machine.cpp` 和必要的 `raft_node.cpp`。
@@ -331,8 +334,9 @@
   Windows/macOS Fallback: Yes.
   Basis: `plan.md` W5；`spec.md` FR-003；现状分析中的 apply/recovery consistency gap。
   Tests To Run: `ctest --test-dir build --output-on-failure -R '^(KvStateMachineTest|RaftSnapshotRecoveryTest|RaftIntegrationTest)\.'`; `./test.sh --group snapshot-recovery`.
+  Execution Note: No-op。T018 的 state-machine replay consistency 回归测试已通过，未发现 `modules/raft/state_machine/state_machine.cpp` 或 `modules/raft/node/raft_node.cpp` 的真实实现缺口；本任务未修改生产代码。
 
-- [ ] T022 [US2] Update `specs/004-raft-industrialization/validation-matrix.md` with US2 consistency evidence
+- [x] T022 [US2] Update `specs/004-raft-industrialization/validation-matrix.md` with US2 consistency evidence
   Goal: 记录 catch-up、leader switch、apply/replay 一致性的新增回归证据与未覆盖时序风险。
   Input: T016-T021 results, `validation-matrix.md`.
   Scope: 文档更新。
@@ -356,7 +360,7 @@
 
 ### Implementation for User Story 3
 
-- [ ] T023 [P] [US3] Refine `test.sh` into explicit platform-neutral vs Linux-specific sections
+- [x] T023 [P] [US3] Refine `test.sh` into explicit platform-neutral vs Linux-specific sections
   Goal: 让 Bash 主入口清楚标记 Linux-specific 组、平台无关组、`--keep-data` 和失败 rerun 指南。
   Input: `test.sh`, `validation-matrix.md`, `contracts/validation-entrypoints.md`.
   Scope: 只改 `test.sh` 和相关 spec 文档。
@@ -369,7 +373,7 @@
   Basis: `research.md` Decision 5/6；`plan.md` W6/W7。
   Tests To Run: `./test.sh --group all`; `./test.sh --group persistence`.
 
-- [ ] T024 [P] [US3] Extend `CMakePresets.json` and adjust top-level `CMakeLists.txt` only if needed for non-hardcoded Windows configuration
+- [x] T024 [P] [US3] Extend `CMakePresets.json` and adjust top-level `CMakeLists.txt` only if needed for non-hardcoded Windows configuration
   Goal: 提供更明确的跨平台 configure/build/test 入口，减少当前仅 Linux/Ninja 友好的假设；只有在必要时才修改 `CMakeLists.txt` 去掉 Windows 本机路径耦合。
   Input: `CMakePresets.json`, top-level `CMakeLists.txt`, `contracts/validation-entrypoints.md`, `validation-matrix.md`.
   Scope: 首选修改 presets；仅在 preset 无法解决 Windows 路径耦合时，最小修改 `CMakeLists.txt` 的工具链/依赖注入方式。
@@ -382,7 +386,7 @@
   Basis: 现状分析中的 `CMakeLists.txt` Windows 硬编码风险；`plan.md` W6/W8。
   Tests To Run: `cmake --preset debug-ninja-low-parallel`; `cmake --build --preset debug-ninja-low-parallel`; `ctest --preset debug-tests --output-on-failure`.
 
-- [ ] T025 [P] [US3] Add non-Bash fallback runner in `test.ps1`
+- [x] T025 [P] [US3] Add non-Bash fallback runner in `test.ps1`
   Goal: 提供 Windows/macOS 规划可参考的非 Bash 测试入口，至少覆盖平台无关的 CMake/CTest 流程。
   Input: `test.sh`, `CMakePresets.json`, `contracts/validation-entrypoints.md`, `validation-matrix.md`.
   Scope: 新增 `test.ps1`；必要时更新相关文档。

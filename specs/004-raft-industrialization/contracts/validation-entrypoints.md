@@ -21,6 +21,7 @@
     `Linux primary` 定义一致。
   - 它可以承载 Linux-specific 分组、低并发回归和 `--keep-data` 现场保留。
   - 它不能被当作非 Linux 平台唯一入口。
+  - Windows PowerShell fallback 不能替代它的 Linux-primary 含义。
 
 ### 2. 平台无关 CTest fallback
 
@@ -35,16 +36,44 @@
     [../validation-matrix.md](../validation-matrix.md) 中被标注为
     Linux-specific 时，该入口只提供逻辑回归 fallback。
 
-### 3. Windows/macOS fallback 或 deferred 入口
+### 3. Windows / 非 Bash preset fallback
 
 - **当前状态**：
-  - 计划中的 PowerShell wrapper 或等价非 Bash 命令序列，尚未落地
+  - Windows 已补齐 preset-based fallback：
+    - `cmake --preset windows`
+    - `cmake --build --preset windows-release`
+    - `ctest --preset windows-tests`
 - **约定**：
-  - 在正式的 `test.ps1` 或等价脚本出现前，Windows/macOS 当前只能依赖
-    `ctest --preset debug-tests --output-on-failure` 作为 fallback。
-  - 任何依赖 Bash、`--keep-data`、Linux-specific failure injection 或
-    crash-style 语义的流程，都必须在 Windows/macOS 上标注为 deferred，
-    而不是隐式视为已完成。
+  - 该入口只代表 Windows 的 platform-neutral configure/build/CTest fallback，
+    不替代 Linux Bash 主入口。
+  - 它用于 Visual Studio 17 2022 multi-config 生成器，因此通过
+    `configuration: Release` 选择配置，而不是依赖 `CMAKE_BUILD_TYPE`。
+  - 任何依赖 Bash、`--keep-data`、Linux-specific failure injection、
+    directory sync、crash-style 语义或 retained-artifact 诊断的流程，
+    都必须继续标注为 Linux-primary 或 deferred，不能因为
+    `windows-tests` 可运行就视为 Windows 已具备等价运行时证据。
+
+### 4. Windows PowerShell fallback wrapper
+
+- **当前状态**：
+  - Windows PowerShell fallback 已提供：
+    - `.\test.ps1 -All`
+- **约定**：
+  - `test.ps1` 是 Windows 用户的推荐一键 fallback 入口。
+  - 它只封装以下 platform-neutral 流程：
+    - `cmake --preset windows`
+    - `cmake --build --preset windows-release`
+    - `ctest --preset windows-tests`
+  - 它不调用 Bash，不执行 Linux-specific 分组，也不声称提供与
+    `./test.sh --keep-data` 等价的 retained-artifact 诊断能力。
+
+### 5. Windows/macOS wrapper follow-up
+
+- **当前状态**：
+  - `test.ps1` 已作为 Windows fallback 落地
+- **约定**：
+  - T025 已补齐 Windows PowerShell wrapper。
+  - 其他非 Bash 环境继续以已有 CMake/CTest 命令作为逻辑回归 fallback。
 
 ## 验证顺序约定
 
@@ -57,7 +86,10 @@
    `cmake --build --preset debug-ninja-low-parallel` 完成低并发构建。
 3. 使用 `CTEST_PARALLEL_LEVEL=1 ./test.sh --group all` 作为 Linux 主回归入口。
 4. 如果出现高风险失败，按分组 rerun 命令进入 focused regression。
-5. 如果当前环境不走 Bash 主入口，使用
+5. 如果当前环境是 Windows，优先使用 `.\test.ps1 -All` 作为 PowerShell
+   fallback；其底层固定调用 `windows`、`windows-release`、
+   `windows-tests` preset。
+6. 如果当前环境不走 Bash 主入口且不适用 Windows preset，则使用
    `ctest --preset debug-tests --output-on-failure` 作为平台无关 fallback。
 
 ## 真实分组与 rerun 约定
@@ -84,6 +116,66 @@
 - `election`：选举与 split-brain 路径
 - `segment-cluster`：高负载 segment/snapshot 组合路径
 
+## `test.sh` section map 约定
+
+`test.sh` 的帮助输出和运行期摘要现在必须显式区分以下 section：
+
+### 1. 平台无关基础回归组
+
+- `unit`
+- `snapshot-storage`
+- `kv-service`
+- `segment-basic`
+- `election`
+- `replication`
+- `integration`
+- `snapshot-catchup`
+- `snapshot-restart`
+- `replicator`
+
+解释规则：
+
+- 这些 group 的基础逻辑回归属于 platform-neutral baseline。
+- 它们仍可以在 Linux Bash 主入口下低并发重跑，但不能因此被误标记为
+  Linux-only 语义。
+- 若环境不使用 Bash 主入口，优先退回
+  `ctest --preset debug-tests --output-on-failure` 或对应的 `ctest -R`。
+
+### 2. 共享 restart / durability 回归组
+
+- `persistence`
+
+解释规则：
+
+- 该 group 的 restart recovery / trusted-state 主体逻辑属于平台无关回归。
+- 若牵涉 exact durability、retained artifacts 或 Bash-first 排障过程，
+  解释时必须同时引用 Linux-specific 边界，而不是把整组简单标成
+  platform-neutral 或 Linux-only。
+
+### 3. Linux-specific / Linux-primary 聚焦组
+
+- `snapshot-recovery`
+- `diagnosis`
+- `segment-cluster`
+
+解释规则：
+
+- 这些 group 必须在 `test.sh` 头部或输出中明确标成
+  Linux-specific / Linux-primary focus groups。
+- 这里的 Linux-specific 指当前主入口解释、时序风险或 retained-artifact
+  排障边界，不得被扩写成“协议或业务逻辑只在 Linux 正确”。
+
+### 4. Linux Bash 主扫入口
+
+- `all`
+
+解释规则：
+
+- `all` 必须明确说明执行顺序：
+  platform-neutral base regression groups -> `persistence` ->
+  Linux-specific / Linux-primary focus groups -> final full-suite check。
+- 该入口是 Linux Bash 主验收路径，不等价于非 Bash / 跨平台 fallback。
+
 ## Linux-specific 分组与解释规则
 
 下列证据必须显式按 Linux-primary 或 Linux-specific 解释：
@@ -106,8 +198,25 @@
   - `./test.sh --group diagnosis --keep-data`
 - 文档必须明确：
   - `--keep-data` 是 Linux Bash 主入口能力
+  - `test.sh` 必须把 `--keep-data` 说明放在 section map 或帮助输出中
+  - 失败后应先按原 group 使用 `CTEST_PARALLEL_LEVEL=1 ./test.sh --group <name>`
+    重跑，再按需追加 `--keep-data`
   - `ctest --preset debug-tests` 不默认提供等价现场保留能力
   - 若需要 retained artifacts 做排障，应回到 Linux 主入口重跑
+
+## 非 Bash / 跨平台 fallback 约定
+
+- 当前文档化 fallback 入口仍是：
+  - `ctest --preset debug-tests --output-on-failure`
+- Windows 当前额外具备 preset-based fallback：
+  - `.\test.ps1 -All`
+  - `cmake --preset windows`
+  - `cmake --build --preset windows-release`
+  - `ctest --preset windows-tests`
+- 若需要更细粒度重跑，可使用与 `test.sh` 对应的直接 `ctest --test-dir build -R`
+  命令，但解释范围仍属于 platform-neutral logic fallback。
+- `test.ps1` 只是 Windows wrapper，不得把它描述成与 Linux Bash 主入口
+  完全等价。
 
 ## 非目标
 

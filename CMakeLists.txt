@@ -18,6 +18,18 @@ set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
+if(MSVC)
+  add_compile_options(/utf-8)
+endif()
+
+if(WIN32)
+  add_compile_definitions(
+    WIN32_LEAN_AND_MEAN
+    NOMINMAX
+    _WIN32_WINNT=0x0A00
+  )
+endif()
+
 # 让 VS Code / clangd 能拿到真实编译参数
 # 注意：这个对 Makefile / Ninja 生效，Visual Studio 生成器会忽略
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
@@ -111,6 +123,13 @@ target_link_libraries(raft_proto
     protobuf::libprotobuf
     gRPC::grpc++
 )
+
+if(WIN32)
+  target_link_libraries(raft_proto
+    PUBLIC
+      Ws2_32
+  )
+endif()
 
 add_library(raft_core
   modules/raft/runtime/min_heap_timer.cpp

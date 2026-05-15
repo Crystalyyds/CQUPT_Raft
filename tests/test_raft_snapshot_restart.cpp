@@ -94,6 +94,13 @@ Command SetCommand(const std::string& key, const std::string& value) {
   return command;
 }
 
+Command DeleteCommand(const std::string& key) {
+  Command command;
+  command.type = CommandType::kDelete;
+  command.key = key;
+  return command;
+}
+
 std::uint64_t NowForPath() {
   return static_cast<std::uint64_t>(
       std::chrono::duration_cast<std::chrono::milliseconds>(
@@ -668,6 +675,55 @@ bool WaitForValueOnAll(const std::vector<std::shared_ptr<RaftNode>>& nodes,
   return false;
 }
 
+bool WaitForMissingOnAll(const std::vector<std::shared_ptr<RaftNode>>& nodes,
+                         const std::string& key,
+                         std::chrono::milliseconds timeout,
+                         const std::vector<std::size_t>& excluded = {},
+                         std::string* diagnostics = nullptr) {
+  const auto deadline = Clock::now() + timeout;
+  std::string last_cluster_state;
+  while (Clock::now() < deadline) {
+    bool all_missing = true;
+    std::ostringstream cluster_values;
+
+    for (std::size_t i = 0; i < nodes.size(); ++i) {
+      if (IsExcluded(i, excluded) || !nodes[i]) {
+        continue;
+      }
+
+      std::string value;
+      if (cluster_values.tellp() > 0) {
+        cluster_values << " | ";
+      }
+      cluster_values << "node[" << i << "]=";
+      if (nodes[i]->DebugGetValue(key, &value)) {
+        cluster_values << value;
+        all_missing = false;
+        break;
+      }
+      cluster_values << "<missing>";
+    }
+
+    last_cluster_state = cluster_values.str();
+
+    if (all_missing) {
+      if (diagnostics != nullptr) {
+        *diagnostics = "value missing on all nodes, key=" + key +
+                       ", cluster=" + DescribeCluster(nodes, excluded);
+      }
+      return true;
+    }
+
+    std::this_thread::sleep_for(std::chrono::milliseconds(50));
+  }
+  if (diagnostics != nullptr) {
+    *diagnostics = "value still present on some node, key=" + key +
+                   ", cluster_values=" + last_cluster_state +
+                   ", cluster=" + DescribeCluster(nodes, excluded);
+  }
+  return false;
+}
+
 bool WaitForNodeFieldAtLeast(const std::shared_ptr<RaftNode>& node,
                              const std::string& field_name,
                              std::uint64_t minimum,
@@ -700,6 +756,67 @@ bool WaitForNodeFieldAtLeast(const std::shared_ptr<RaftNode>& node,
                                            : std::string("<missing>")) +
                    ", minimum=" + std::to_string(minimum) +
                    ", describe=" + last_describe;
+  }
+  return false;
+}
+
+bool WaitForOrderedCommitApplyAtLeast(const std::vector<std::shared_ptr<RaftNode>>& nodes,
+                                      std::uint64_t minimum_index,
+                                      std::chrono::milliseconds timeout,
+                                      std::string* diagnostics = nullptr,
+                                      const std::vector<std::size_t>& excluded = {}) {
+  const auto deadline = Clock::now() + timeout;
+  std::string last_detail;
+
+  while (Clock::now() < deadline) {
+    bool all_ready = true;
+    last_detail.clear();
+
+    for (std::size_t i = 0; i < nodes.size(); ++i) {
+      if (IsExcluded(i, excluded) || !nodes[i]) {
+        continue;
+      }
+
+      const std::string describe = nodes[i]->Describe();
+      const auto commit_index = ExtractUintField(describe, "commit_index");
+      const auto last_applied = ExtractUintField(describe, "last_applied");
+      if (!commit_index.has_value() || !last_applied.has_value()) {
+        all_ready = false;
+        last_detail = "missing commit/apply fields on node[" + std::to_string(i) +
+                      "], describe=" + describe;
+        continue;
+      }
+      if (*last_applied > *commit_index) {
+        if (diagnostics != nullptr) {
+          *diagnostics = "last_applied exceeded commit_index on node[" +
+                         std::to_string(i) + "], describe=" + describe;
+        }
+        return false;
+      }
+      if (*commit_index < minimum_index || *last_applied < minimum_index) {
+        all_ready = false;
+        last_detail = "node[" + std::to_string(i) + "] not at replay frontier, describe=" +
+                      describe;
+      }
+    }
+
+    if (all_ready) {
+      if (diagnostics != nullptr) {
+        *diagnostics = "commit/apply reached replay frontier on all nodes, minimum_index=" +
+                       std::to_string(minimum_index) +
+                       ", cluster=" + DescribeCluster(nodes, excluded);
+      }
+      return true;
+    }
+
+    std::this_thread::sleep_for(std::chrono::milliseconds(50));
+  }
+
+  if (diagnostics != nullptr) {
+    *diagnostics = "timed out waiting for ordered commit/apply frontier, minimum_index=" +
+                   std::to_string(minimum_index) +
+                   ", detail=" + last_detail +
+                   ", cluster=" + DescribeCluster(nodes, excluded);
   }
   return false;
 }
@@ -1073,6 +1190,197 @@ TEST_F(RaftSnapshotRestartTest, SnapshotAndPostSnapshotLogsRecoverAfterFullResta
   ASSERT_TRUE(WaitForValueOnAll(cluster.Nodes(), "after_tail_restart", "ok",
                                 std::chrono::seconds(20)))
       << "cluster did not continue after restoring snapshot + tail logs";
+}
+
+TEST_F(RaftSnapshotRecoveryTest,
+       FullRestartReplaysSnapshotTailWithoutLosingDeletesOrOverwrites) {
+  auto cluster = MakeCluster("snapshot_tail_replay_consistency", true, 12);
+  cluster.Start();
+
+  auto stable_leader = WaitForStableLeader(cluster.Nodes(), std::chrono::seconds(8));
+  ASSERT_TRUE(stable_leader.has_value())
+      << "leader did not stabilize before replay consistency test, cluster="
+      << DescribeCluster(cluster.Nodes());
+
+  ProposeResult result;
+  std::string propose_diagnostics;
+  ASSERT_TRUE(ProposeWithRetry(cluster.Nodes(), SetCommand("snapshot_only", "base"),
+                               std::chrono::seconds(10), &result, {}, &propose_diagnostics))
+      << "snapshot_only baseline write failed, diagnostics=" << propose_diagnostics;
+  ASSERT_TRUE(ProposeWithRetry(cluster.Nodes(), SetCommand("tail_delete", "present"),
+                               std::chrono::seconds(10), &result, {}, &propose_diagnostics))
+      << "tail_delete baseline write failed, diagnostics=" << propose_diagnostics;
+  ASSERT_TRUE(ProposeWithRetry(cluster.Nodes(), SetCommand("tail_overwrite", "before"),
+                               std::chrono::seconds(10), &result, {}, &propose_diagnostics))
+      << "tail_overwrite baseline write failed, diagnostics=" << propose_diagnostics;
+
+  WriteManyValues(cluster.Nodes(), "replay_base", 24);
+
+  stable_leader = WaitForStableLeader(cluster.Nodes(), std::chrono::seconds(8));
+  ASSERT_TRUE(stable_leader.has_value())
+      << "leader did not stabilize after baseline writes, cluster="
+      << DescribeCluster(cluster.Nodes());
+  const std::size_t leader_index = stable_leader->leader_index;
+
+  std::string snapshot_diagnostics;
+  ASSERT_TRUE(WaitForNodeFieldAtLeast(cluster.Nodes()[leader_index],
+                                      "last_snapshot_index",
+                                      12,
+                                      std::chrono::seconds(20),
+                                      &snapshot_diagnostics))
+      << "leader did not create trusted snapshot before tail replay test, diagnostics="
+      << snapshot_diagnostics;
+
+  ASSERT_TRUE(ProposeWithRetry(cluster.Nodes(), DeleteCommand("tail_delete"),
+                               std::chrono::seconds(10), &result, {}, &propose_diagnostics))
+      << "tail_delete replay failed, diagnostics=" << propose_diagnostics;
+  ASSERT_TRUE(ProposeWithRetry(cluster.Nodes(), SetCommand("tail_overwrite", "after"),
+                               std::chrono::seconds(10), &result, {}, &propose_diagnostics))
+      << "tail_overwrite replay failed, diagnostics=" << propose_diagnostics;
+  ASSERT_TRUE(ProposeWithRetry(cluster.Nodes(), SetCommand("tail_only", "replayed"),
+                               std::chrono::seconds(10), &result, {}, &propose_diagnostics))
+      << "tail_only replay failed, diagnostics=" << propose_diagnostics;
+
+  const std::uint64_t expected_tail_index = result.log_index;
+
+  std::string cluster_diagnostics;
+  ASSERT_TRUE(WaitForValueOnAll(cluster.Nodes(), "snapshot_only", "base",
+                                std::chrono::seconds(15), {}, &cluster_diagnostics))
+      << cluster_diagnostics;
+  ASSERT_TRUE(WaitForValueOnAll(cluster.Nodes(), "tail_overwrite", "after",
+                                std::chrono::seconds(15), {}, &cluster_diagnostics))
+      << cluster_diagnostics;
+  ASSERT_TRUE(WaitForValueOnAll(cluster.Nodes(), "tail_only", "replayed",
+                                std::chrono::seconds(15), {}, &cluster_diagnostics))
+      << cluster_diagnostics;
+  ASSERT_TRUE(WaitForMissingOnAll(cluster.Nodes(), "tail_delete",
+                                  std::chrono::seconds(15), {}, &cluster_diagnostics))
+      << cluster_diagnostics;
+  ASSERT_TRUE(WaitForOrderedCommitApplyAtLeast(cluster.Nodes(), expected_tail_index,
+                                               std::chrono::seconds(15),
+                                               &cluster_diagnostics))
+      << cluster_diagnostics;
+
+  cluster.StopAll();
+  cluster.Start();
+
+  stable_leader = WaitForStableLeader(cluster.Nodes(), std::chrono::seconds(10));
+  ASSERT_TRUE(stable_leader.has_value())
+      << "leader did not stabilize after full restart, cluster="
+      << DescribeCluster(cluster.Nodes());
+
+  ASSERT_TRUE(WaitForValueOnAll(cluster.Nodes(), "snapshot_only", "base",
+                                std::chrono::seconds(20), {}, &cluster_diagnostics))
+      << cluster_diagnostics;
+  ASSERT_TRUE(WaitForValueOnAll(cluster.Nodes(), "tail_overwrite", "after",
+                                std::chrono::seconds(20), {}, &cluster_diagnostics))
+      << "snapshot load plus tail replay lost overwrite semantics, diagnostics="
+      << cluster_diagnostics;
+  ASSERT_TRUE(WaitForValueOnAll(cluster.Nodes(), "tail_only", "replayed",
+                                std::chrono::seconds(20), {}, &cluster_diagnostics))
+      << "snapshot load plus tail replay lost tail-only value, diagnostics="
+      << cluster_diagnostics;
+  ASSERT_TRUE(WaitForMissingOnAll(cluster.Nodes(), "tail_delete",
+                                  std::chrono::seconds(20), {}, &cluster_diagnostics))
+      << "snapshot load plus tail replay lost delete semantics, diagnostics="
+      << cluster_diagnostics;
+  ASSERT_TRUE(WaitForOrderedCommitApplyAtLeast(cluster.Nodes(), expected_tail_index,
+                                               std::chrono::seconds(20),
+                                               &cluster_diagnostics))
+      << "restart did not advance apply frontier to committed tail boundary, diagnostics="
+      << cluster_diagnostics;
+}
+
+TEST_F(RaftSnapshotRecoveryTest,
+       RestartedFollowerAppliesCommittedTailExactlyOnceAfterSnapshotLoad) {
+  auto cluster = MakeCluster("follower_restart_apply_consistency", true, 6);
+  cluster.Start();
+
+  auto stable_leader = WaitForStableLeader(cluster.Nodes(), std::chrono::seconds(8));
+  ASSERT_TRUE(stable_leader.has_value())
+      << "leader did not stabilize before follower replay test, cluster="
+      << DescribeCluster(cluster.Nodes());
+
+  const std::size_t leader_index = stable_leader->leader_index;
+  const std::size_t stopped_follower = PickFollowerIndex(cluster.Nodes(), stable_leader->leader);
+  ASSERT_LT(stopped_follower, cluster.Nodes().size()) << "failed to pick follower";
+  cluster.StopNode(stopped_follower);
+
+  const std::vector<std::size_t> excluded{stopped_follower};
+  ProposeResult result;
+  std::string propose_diagnostics;
+  ASSERT_TRUE(ProposeWithRetry(cluster.Nodes(), SetCommand("apply_anchor", "snapshot"),
+                               std::chrono::seconds(10), &result, excluded,
+                               &propose_diagnostics))
+      << "apply_anchor baseline write failed, diagnostics=" << propose_diagnostics;
+
+  WriteManyValues(cluster.Nodes(), "apply_gap", 24, excluded);
+
+  std::string cluster_diagnostics;
+  ASSERT_TRUE(WaitForNodeFieldAtLeast(cluster.Nodes()[leader_index],
+                                      "last_snapshot_index",
+                                      6,
+                                      std::chrono::seconds(20),
+                                      &cluster_diagnostics))
+      << "leader did not create snapshot before follower restart apply test, diagnostics="
+      << cluster_diagnostics;
+
+  ASSERT_TRUE(ProposeWithRetry(cluster.Nodes(), SetCommand("apply_view", "before_delete"),
+                               std::chrono::seconds(10), &result, excluded,
+                               &propose_diagnostics))
+      << "apply_view initial write failed, diagnostics=" << propose_diagnostics;
+  ASSERT_TRUE(ProposeWithRetry(cluster.Nodes(), DeleteCommand("apply_view"),
+                               std::chrono::seconds(10), &result, excluded,
+                               &propose_diagnostics))
+      << "apply_view delete failed, diagnostics=" << propose_diagnostics;
+  ASSERT_TRUE(ProposeWithRetry(cluster.Nodes(), SetCommand("apply_view", "after_replay"),
+                               std::chrono::seconds(10), &result, excluded,
+                               &propose_diagnostics))
+      << "apply_view overwrite failed, diagnostics=" << propose_diagnostics;
+  ASSERT_TRUE(ProposeWithRetry(cluster.Nodes(), SetCommand("apply_tail", "committed"),
+                               std::chrono::seconds(10), &result, excluded,
+                               &propose_diagnostics))
+      << "apply_tail write failed, diagnostics=" << propose_diagnostics;
+
+  const std::uint64_t expected_tail_index = result.log_index;
+
+  ASSERT_TRUE(WaitForValueOnAll(cluster.Nodes(), "apply_view", "after_replay",
+                                std::chrono::seconds(15), excluded, &cluster_diagnostics))
+      << cluster_diagnostics;
+  ASSERT_TRUE(WaitForValueOnAll(cluster.Nodes(), "apply_tail", "committed",
+                                std::chrono::seconds(15), excluded, &cluster_diagnostics))
+      << cluster_diagnostics;
+  ASSERT_TRUE(WaitForOrderedCommitApplyAtLeast(cluster.Nodes(), expected_tail_index,
+                                               std::chrono::seconds(15),
+                                               &cluster_diagnostics,
+                                               excluded))
+      << cluster_diagnostics;
+
+  cluster.RestartNode(stopped_follower);
+
+  ASSERT_TRUE(WaitForValueOnNode(cluster.Nodes()[stopped_follower],
+                                 "apply_anchor", "snapshot",
+                                 std::chrono::seconds(20),
+                                 &cluster_diagnostics))
+      << "restarted follower lost snapshot-covered state, diagnostics="
+      << cluster_diagnostics;
+  ASSERT_TRUE(WaitForValueOnNode(cluster.Nodes()[stopped_follower],
+                                 "apply_view", "after_replay",
+                                 std::chrono::seconds(20),
+                                 &cluster_diagnostics))
+      << "restarted follower did not replay committed overwrite after snapshot load, diagnostics="
+      << cluster_diagnostics;
+  ASSERT_TRUE(WaitForValueOnNode(cluster.Nodes()[stopped_follower],
+                                 "apply_tail", "committed",
+                                 std::chrono::seconds(20),
+                                 &cluster_diagnostics))
+      << "restarted follower missed committed tail apply after snapshot load, diagnostics="
+      << cluster_diagnostics;
+  ASSERT_TRUE(WaitForOrderedCommitApplyAtLeast(cluster.Nodes(), expected_tail_index,
+                                               std::chrono::seconds(20),
+                                               &cluster_diagnostics))
+      << "cluster did not preserve ordered commit/apply frontier after follower restart, "
+      << "diagnostics=" << cluster_diagnostics;
 }
 
 TEST_F(RaftSnapshotRecoveryTest, StandaloneRestartFallsBackToOlderTrustedSnapshotWhenNewestSnapshotIsCorrupted) {

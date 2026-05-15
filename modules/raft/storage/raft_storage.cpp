@@ -1,3 +1,13 @@
+#if defined(_WIN32)
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#endif
+
 #include "raft/storage/raft_storage.h"
 
 #include <algorithm>
@@ -17,14 +27,14 @@
 #include <utility>
 #include <vector>
 
+#include "raft/node/raft_node.h"
+
 #if defined(_WIN32)
 #include <windows.h>
 #else
 #include <fcntl.h>
 #include <unistd.h>
 #endif
-
-#include "raft/node/raft_node.h"
 
 namespace raftdemo
 {

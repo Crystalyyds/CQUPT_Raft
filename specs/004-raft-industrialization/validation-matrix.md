@@ -36,11 +36,11 @@ cross-platform gaps are scheduled for follow-up work.
 |----------|------|----------------|-------------|--------------------|----------------|------------------------|
 | P0 | Final Linux validation flaky stabilization | Not complete | `003 progress.md` blocked items for snapshot recovery and split-brain timing failures | `./test.sh --group snapshot-recovery`, `./test.sh --group election`, targeted `ctest -R` reruns | Yes | Platform-neutral rerun through `ctest --preset debug-tests`; no equivalent timing guarantee claimed |
 | P0 | Exact durability failure injection (`fsync`, directory sync, rename/replace, prune/remove, partial write) | Missing | `003 progress.md` blocked T613-T616 | New targeted persistence/snapshot tests plus Linux reruns | Yes | Explicit deferred runtime validation; preserve documentation-only fallback |
-| P0 | Restart trusted-state matrix for term/vote/log/snapshot metadata/applied state | Partially covered | `spec.md` FR-003/FR-010, `plan.md` W3 | `./test.sh --group persistence`, `snapshot-recovery`, `diagnosis` | Partially | Platform-neutral recovery tests remain valid; crash semantics not over-claimed |
+| P0 | Restart trusted-state matrix for term/vote/log/snapshot metadata/applied state | US1 accepted; managed regression evidence in place | `spec.md` FR-003/FR-010, `plan.md` W3 | `./test.sh --group persistence`, `snapshot-recovery`, `diagnosis`; targeted `ctest -R '^(PersistenceTest|RaftSegmentStorageTest|RaftSnapshotRecoveryTest|RaftSnapshotDiagnosisTest)\.'` | Partially | Platform-neutral recovery tests remain valid; Linux-specific durability evidence is recorded separately and crash semantics are not over-claimed |
 | P1 | Catch-up after lag, compaction, restart, and snapshot handoff | Implemented but needs stronger proof | `plan.md` W4, current gap classification `B/C` | `./test.sh --group snapshot-catchup`, `integration`, `replicator` | No | Same tests should remain runnable via CTest |
 | P1 | Leader switch and commit/apply ordering under churn | Implemented but still risky | `plan.md` W4, current gap classification `B/C` | `./test.sh --group replication`, `election`, `replicator` | No | Same tests should remain runnable via CTest |
 | P1 | State-machine apply/replay consistency after snapshot/restart | Implemented but needs stronger proof | `plan.md` W5 | `./test.sh --group snapshot-recovery`, targeted `ctest -R` on state machine and integration tests | No | Same tests should remain runnable via CTest |
-| P2 | Unified validation entrypoints and grouped test guidance | Incomplete | Current `test.sh`, `CMakePresets.json`, `plan.md` W6 | `./test.sh --group all`, `ctest --preset debug-tests` | Partially | PowerShell or documented non-Bash fallback required |
+| P2 | Unified validation entrypoints and grouped test guidance | Windows preset-based fallback and PowerShell wrapper added | Current `test.sh`, `test.ps1`, `CMakePresets.json`, `plan.md` W6 | `./test.sh --group all`, `.\test.ps1 -All`, `ctest --preset debug-tests`, `ctest --preset windows-tests` | Partially | PowerShell fallback is now available; Linux-specific runtime evidence still requires explicit boundary notes |
 | P3 | Failure localization and platform-support documentation | Incomplete | `plan.md` W7/W8 | Spec docs and grouped rerun commands | Partially | Explicit support matrix and follow-up notes required |
 | P4 | Windows/macOS deeper runtime validation and CI expansion | Deferred follow-up | `spec.md` platform scope, `plan.md` W8 | Future runtime validation | No | This row is itself the fallback and follow-up definition |
 
@@ -61,6 +61,10 @@ cross-platform gaps are scheduled for follow-up work.
 |-----------|---------|-------|----------------|--------------------|-------|
 | `cmake --preset debug-ninja-low-parallel` | Primary low-parallel configure | Linux primary build path | No | No | Current preferred configure entry |
 | `cmake --build --preset debug-ninja-low-parallel` | Primary low-parallel build | Linux primary build path | No | No | Current preferred build entry |
+| `cmake --preset windows` | Windows configure fallback | Windows platform-neutral baseline setup | No | No | Existing Visual Studio 17 2022 configure preset remains unchanged |
+| `cmake --build --preset windows-release` | Windows low-parallel build fallback | Windows platform-neutral baseline build | No | No | Uses `configurePreset: windows`, `configuration: Release`, `jobs: 2` |
+| `ctest --preset windows-tests` | Windows low-parallel test fallback | Windows platform-neutral baseline execution | No | No | Uses `configuration: Release`, `execution.jobs: 1`, `outputOnFailure: true`; does not claim Linux-specific runtime equivalence |
+| `.\test.ps1 -All` | Windows PowerShell fallback wrapper | Windows platform-neutral one-command validation | No | No | Wraps `windows` / `windows-release` / `windows-tests`; does not run Linux-specific groups |
 | `CTEST_PARALLEL_LEVEL=1 ./test.sh --group all` | Primary regression sweep | Linux primary validation | Partially | Optional via `--keep-data` | Includes grouped Linux execution flow |
 | `./test.sh --group persistence` | Focused restart/durability rerun | Industrialization hotspot | Partially | Optional via `--keep-data` | Main trusted-state regression bucket |
 | `./test.sh --group snapshot-recovery` | Focused snapshot/restart rerun | Industrialization hotspot | Partially | Optional via `--keep-data` | Current flaky blocker area |
@@ -68,7 +72,20 @@ cross-platform gaps are scheduled for follow-up work.
 | `./test.sh --group snapshot-catchup` | Focused catch-up rerun | US2 regression | No | Optional via `--keep-data` | Cluster consistency evidence |
 | `./test.sh --group replicator` | Focused replicator rerun | US2 regression | No | Optional via `--keep-data` | Follower synchronization evidence |
 | `./test.sh --group segment-cluster` | Focused clustered segment/snapshot stress rerun | US2/US3 regression | Partially | Optional via `--keep-data` | Main segment rollover and retained-artifact stress bucket |
-| `ctest --preset debug-tests --output-on-failure` | Platform-neutral fallback | Cross-platform baseline execution contract | No | No | Must remain valid outside Bash-first flows |
+| `ctest --preset debug-tests --output-on-failure` | Platform-neutral fallback | Cross-platform baseline execution contract | No | No | Must remain valid outside Bash-first flows; Linux fallback remains available alongside Windows preset path |
+
+## `test.sh` Section Map
+
+`test.sh` 的帮助输出和执行摘要必须明确展示以下 section，避免把
+platform-neutral baseline、shared restart/durability 和 Linux-specific
+解释边界混在一起。
+
+| Section | Groups | Interpretation rule | Fallback |
+|---------|--------|---------------------|----------|
+| Platform-neutral base regression | `unit`, `snapshot-storage`, `kv-service`, `segment-basic`, `election`, `replication`, `integration`, `snapshot-catchup`, `snapshot-restart`, `replicator` | 基础逻辑回归属于平台无关 baseline；可在 Linux Bash 主入口低并发重跑，但不能因此误标记为 Linux-only 语义 | `ctest --preset debug-tests --output-on-failure` 或对应 `ctest -R` |
+| Shared restart / durability regression | `persistence` | restart recovery / trusted-state 主体逻辑属于平台无关回归；若解释涉及 exact durability 或 retained artifacts，需同时引用 Linux-specific 边界 | `ctest --preset debug-tests --output-on-failure`，必要时回到 Linux Bash 主入口补充 retained-artifact 证据 |
+| Linux-specific / Linux-primary focus | `snapshot-recovery`, `diagnosis`, `segment-cluster` | 当前主入口解释、时序风险和 retained-artifact 排障以 Linux Bash-first 为准；不得夸大为协议只在 Linux 正确 | 仅提供 logic fallback；不声称 Linux 等价 runtime 语义 |
+| Linux Bash primary sweep | `all` | 执行顺序必须明确为 platform-neutral base regression -> `persistence` -> Linux-specific / Linux-primary focus -> final full-suite check | 非 Bash 环境改走 `ctest --preset debug-tests --output-on-failure` |
 
 ## Grouped Linux Rerun Guide
 
@@ -89,11 +106,15 @@ Notes:
 
 - `--keep-data` is a Linux Bash-first capability. It retains `raft_data/`,
   `raft_snapshots/`, and `build/tests/raft_test_data/` for local diagnosis.
+- `test.sh` must document `--keep-data` next to the section map and state that
+  the first rerun step is `CTEST_PARALLEL_LEVEL=1 ./test.sh --group <name>`,
+  with `--keep-data` added only when retained artifacts are needed.
 - For Windows/macOS, the fallback entry remains
   `ctest --preset debug-tests --output-on-failure` or the corresponding direct
-  `ctest --test-dir build ... -R ...` command. These fallbacks provide logic
-  regression only and do not claim Linux-equivalent retained-artifact or
-  crash-style runtime evidence.
+  `ctest --test-dir build ... -R ...` command. On Windows, `.\test.ps1 -All`
+  is the preferred one-command wrapper for the existing preset-based fallback.
+  These fallbacks provide logic regression only and do not claim
+  Linux-equivalent retained-artifact or crash-style runtime evidence.
 - The rerun groups above are not a replacement for the full Linux primary path;
   they exist to narrow failures after a grouped run or a targeted investigation.
 
@@ -112,7 +133,62 @@ For these areas, Windows/macOS follow-up must either:
 
 - use the platform-neutral `ctest --preset debug-tests` path for logic-only
   regression, or
+- on Windows, use `cmake --preset windows`,
+  `cmake --build --preset windows-release`, and
+  `ctest --preset windows-tests` for platform-neutral configure/build/test
+  fallback without over-claiming Linux-specific semantics, or
 - remain explicitly deferred until runtime validation exists.
+
+## US1 Accepted Restart Recovery Evidence
+
+| Evidence area | Covered scenarios | Entrypoint | Latest status | Platform scope |
+|---------------|-------------------|------------|---------------|----------------|
+| Hard-state and log-boundary restart matrix | old-meta/new-log, new-meta/old-log, commit/apply clamp, missing first segment, final segment tail truncate 后 trusted log prefix 选择 | `CTEST_PARALLEL_LEVEL=1 ctest --test-dir build --output-on-failure -R '^(PersistenceTest|RaftSegmentStorageTest)\.'` | PASS | 平台无关恢复逻辑证据；如涉及 exact durability 边界，则由 Linux-specific 注入测试补充 |
+| Snapshot metadata and applied-state restart matrix | invalid snapshot rejection, all-invalid fallback, metadata mismatch, corrupted newest snapshot fallback, trusted snapshot 选择后一致的 applied replay | `CTEST_PARALLEL_LEVEL=1 ctest --test-dir build --output-on-failure -R '^(RaftSnapshotRecoveryTest|RaftSnapshotDiagnosisTest)\.'` | PASS | 平台无关恢复逻辑证据 |
+| Linux-specific durability failure injection and diagnostics | meta/log/snapshot 的 file sync、directory sync、replace/rename、prune/remove、partial write 边界及对应 trusted-state 预期 | `CTEST_PARALLEL_LEVEL=1 ctest --test-dir build --output-on-failure -R '^(PersistenceTest|RaftSegmentStorageTest|SnapshotStorageReliabilityTest|RaftSnapshotRecoveryTest)\.'` | PASS | Linux-specific runtime evidence；Windows/macOS 仅保留逻辑回归 fallback，不声称等价注入语义 |
+
+Current US1 status:
+
+- T012 与 T013 的 restart matrix 已纳入受管 GTest / CTest 回归。
+- T014 已修复 restart trusted-state / final-segment trusted-prefix 恢复缺口。
+- 当前没有遗留 tests-first 红灯；US1 restart recovery 进入 regression-only 状态。
+
+## US2 Accepted Consistency Evidence
+
+| Evidence area | Covered scenarios | Entrypoint | Latest status | Platform scope |
+|---------------|-------------------|------------|---------------|----------------|
+| Catch-up and snapshot handoff consistency | follower 落后 live log 后通过 log replay catch-up 恢复；follower 落后到 retained snapshot boundary 后通过 snapshot handoff catch-up 恢复；catch-up 后 committed ordering 保持一致 | `CTEST_PARALLEL_LEVEL=1 ctest --test-dir build --output-on-failure -R '^(RaftSnapshotCatchupTest|RaftIntegrationTest)\.'` | PASS | 平台无关 cluster consistency 逻辑证据 |
+| Leader-switch and commit/apply ordering consistency | leader 切换后 committed state 保持不变；新 leader 继续推进新日志；lagging follower、leader switch 与新 proposal 混合时 commit/apply 不逆序 | `CTEST_PARALLEL_LEVEL=1 ctest --test-dir build --output-on-failure -R '^(RaftLeaderSwitchOrderingTest)\.'` | PASS | 平台无关 cluster consistency 逻辑证据 |
+| State-machine replay consistency | snapshot load 后 tail replay 不丢失；restart 后 committed log apply 一致；state machine 最终视图与 committed/applied 状态一致；duplicate apply / missed apply 风险受回归保护 | `CTEST_PARALLEL_LEVEL=1 ctest --test-dir build --output-on-failure -R '^(KvStateMachineTest|RaftSnapshotRecoveryTest)\.'` | PASS | 平台无关 replay / restart consistency 逻辑证据 |
+
+Current US2 status:
+
+- T016 已提供 catch-up / snapshot handoff 回归证据，当前没有暴露 `replicator.cpp` 生产缺口。
+- T017 已提供 leader-switch / commit-apply ordering 回归证据，当前没有暴露 `raft_node.cpp` 生产缺口。
+- T018 已提供 state-machine replay consistency 回归证据，当前没有暴露 `state_machine.cpp` 或 `raft_node.cpp` 生产缺口。
+- T019、T020、T021 均以 no-op 关闭：因为对应 tests-first 回归均通过，当前没有进入生产修复的输入证据。
+- 当前没有 US2 tests-first 红灯；US2 consistency 进入 regression-only 状态。
+- US2 完成后，lag/restart/leader-switch 一致性已具备独立验收所需的回归证据，不依赖新增协议语义或大范围生产代码重写。
+
+### US2 Platform-Neutral Regression Coverage
+
+- catch-up after lag:
+  follower 落后 live log 后通过 log replay catch-up 恢复，以及 follower 落后到 retained snapshot boundary 后通过 snapshot handoff catch-up 恢复，均已由 `RaftSnapshotCatchupTest` / `RaftIntegrationTest` 受管 CTest 覆盖。
+- leader switch consistency:
+  leader 切换后 committed state 保持不变、新 leader 继续推进 committed log、lagging follower 与新 proposal 混合情况下状态仍能收敛，均已由 `RaftLeaderSwitchOrderingTest` 覆盖。
+- commit/apply ordering:
+  `commit_index` 与 `last_applied` 的顺序边界，以及 leader switch / follower catch-up 交织时不出现 commit/apply 逆序，已由 `RaftLeaderSwitchOrderingTest` 和相关 US2 回归覆盖。
+- state-machine replay consistency:
+  snapshot load 后 tail replay、restart 后 committed log apply、state machine 最终视图与 committed/applied 状态一致，以及 duplicate apply / missed apply 风险，已由 `KvStateMachineTest` / `RaftSnapshotRecoveryTest` 覆盖。
+
+### US2 Linux-Primary Observation Or Follow-Up Risk
+
+- timing-sensitive clustered validation:
+  虽然 US2 语义已由平台无关回归覆盖，但更长链路、时序更敏感的集群稳定性观察仍主要依赖 Linux 主验收入口，例如 `./test.sh --group snapshot-catchup`、`replicator`、`replication` 的低并发复验。
+- retained-artifact diagnosis:
+  若后续需要保留 `raft_data/`、`raft_snapshots/` 或构造现场进行人工诊断，当前仍以 Linux Bash-first 的 `--keep-data` 流程为主；这属于诊断便利性差异，不影响已记录的 US2 平台无关逻辑证据。
+- cross-platform runtime follow-up:
+  Windows/macOS 目前仍以 `ctest --test-dir build ...` 的平台无关逻辑回归为主，尚未补充与 Linux 主验收等价的长链路运行时观察；这仍属于 `W6/W8` 的后续范围，而不是 US2 未完成项。
 
 ## Current Risk Register
 
@@ -121,8 +197,8 @@ For these areas, Windows/macOS follow-up must either:
 | R1 | Snapshot recovery timing assumption causes false negative acceptance failures | Complete but consistency-risky | `003 progress.md` blocked item 1 | T003, T005 |
 | R2 | Split-brain timing assumption causes false negative acceptance failures | Complete but consistency-risky | `003 progress.md` blocked item 2 | T004, T005 |
 | R3 | Exact sync/rename/prune failure boundaries are not covered by deterministic tests | Half-finished / missing industrialization ability | `003 progress.md` blocked T613-T616 | T006-T011 |
-| R4 | Restart trusted-state combinations are stronger than before, but still not exhaustively classified | Complete but under-tested | `plan.md` W3 | T012-T015 |
-| R5 | Catch-up, leader switch, and replay consistency need stronger regression evidence | Complete but under-tested / risky | `plan.md` W4/W5 | T016-T022 |
+| R4 | Restart trusted-state combinations for term/vote/log/snapshot metadata/applied state regress | Accepted for US1 and protected by managed restart matrix tests | T012/T013 targeted matrices plus T014 recovery fixes | Regression only; keep evidence in T015 |
+| R5 | Catch-up, leader switch, and replay consistency need stronger regression evidence | Accepted for US2 and protected by managed consistency regressions | T016/T017/T018 targeted regressions passed; T019/T020/T021 were no-op because no production defect evidence was proven | Regression only; documentation follow-up stays in T022 |
 | R6 | Current validation flow is useful on Linux but not yet consolidated cross-platform | Cross-platform risk | `test.sh`, `CMakePresets.json`, `plan.md` W6 | T023-T029 |
 | R7 | Windows/macOS runtime semantics for durability-related paths are still not verified | Cross-platform risk / deferred | `003 progress.md` notes, `spec.md` platform scope | T027, T031, T032 |
 
@@ -141,14 +217,27 @@ For these areas, Windows/macOS follow-up must either:
   `RaftSnapshotDiagnosisTest.RestartedSingleNodeLoadsSnapshotAndTailLogsWithoutPeers`
   and
   `RaftSnapshotDiagnosisTest.CompactedClusterReplicatesNewLogAfterRestartedLeaderStepsDown`
+- Restart trusted-state and log-boundary matrix coverage from T012/T014 via
+  `PersistenceTest` and `RaftSegmentStorageTest` targeted restart matrices
+- Snapshot metadata and applied-state restart matrix coverage from T013 via
+  `RaftSnapshotRecoveryTest` and `RaftSnapshotDiagnosisTest`
+- Catch-up and snapshot handoff consistency coverage from T016 via
+  `RaftSnapshotCatchupTest` and `RaftIntegrationTest`
+- Leader-switch and commit/apply ordering consistency coverage from T017 via
+  `RaftLeaderSwitchOrderingTest`
+- State-machine replay consistency coverage from T018 via
+  `KvStateMachineTest` and `RaftSnapshotRecoveryTest`
+- T019/T020/T021 concluded as no-op because T016/T017/T018 did not produce
+  tests-first red evidence requiring production fixes
+- Current US1 restart recovery acceptance has no remaining tests-first red
+  cases in the managed CTest path
+- Current US2 consistency acceptance has no remaining tests-first red cases in
+  the managed CTest path
 
 ### Enters Follow-Up Hardening
 
 - Linux flaky acceptance stabilization
 - Exact failure injection seams and tests
-- Restart trusted-state coverage completion
-- Catch-up and leader-switch regression strengthening
-- State-machine replay consistency strengthening
 - Cross-platform validation entry consolidation
 - Platform support and failure-localization documentation
 - Windows/macOS runtime-validation and CI follow-up definition
