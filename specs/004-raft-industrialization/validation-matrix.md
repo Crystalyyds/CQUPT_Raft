@@ -40,7 +40,7 @@ cross-platform gaps are scheduled for follow-up work.
 | P1 | Catch-up after lag, compaction, restart, and snapshot handoff | Implemented but needs stronger proof | `plan.md` W4, current gap classification `B/C` | `./test.sh --group snapshot-catchup`, `integration`, `replicator` | No | Same tests should remain runnable via CTest |
 | P1 | Leader switch and commit/apply ordering under churn | Implemented but still risky | `plan.md` W4, current gap classification `B/C` | `./test.sh --group replication`, `election`, `replicator` | No | Same tests should remain runnable via CTest |
 | P1 | State-machine apply/replay consistency after snapshot/restart | Implemented but needs stronger proof | `plan.md` W5 | `./test.sh --group snapshot-recovery`, targeted `ctest -R` on state machine and integration tests | No | Same tests should remain runnable via CTest |
-| P2 | Unified validation entrypoints and grouped test guidance | Incomplete | Current `test.sh`, `CMakePresets.json`, `plan.md` W6 | `./test.sh --group all`, `ctest --preset debug-tests` | Partially | PowerShell or documented non-Bash fallback required |
+| P2 | Unified validation entrypoints and grouped test guidance | Windows preset-based fallback added; Bash wrapper follow-up still incomplete | Current `test.sh`, `CMakePresets.json`, `plan.md` W6 | `./test.sh --group all`, `ctest --preset debug-tests`, `ctest --preset windows-tests` | Partially | PowerShell or documented non-Bash fallback required |
 | P3 | Failure localization and platform-support documentation | Incomplete | `plan.md` W7/W8 | Spec docs and grouped rerun commands | Partially | Explicit support matrix and follow-up notes required |
 | P4 | Windows/macOS deeper runtime validation and CI expansion | Deferred follow-up | `spec.md` platform scope, `plan.md` W8 | Future runtime validation | No | This row is itself the fallback and follow-up definition |
 
@@ -61,6 +61,9 @@ cross-platform gaps are scheduled for follow-up work.
 |-----------|---------|-------|----------------|--------------------|-------|
 | `cmake --preset debug-ninja-low-parallel` | Primary low-parallel configure | Linux primary build path | No | No | Current preferred configure entry |
 | `cmake --build --preset debug-ninja-low-parallel` | Primary low-parallel build | Linux primary build path | No | No | Current preferred build entry |
+| `cmake --preset windows` | Windows configure fallback | Windows platform-neutral baseline setup | No | No | Existing Visual Studio 17 2022 configure preset remains unchanged |
+| `cmake --build --preset windows-release` | Windows low-parallel build fallback | Windows platform-neutral baseline build | No | No | Uses `configurePreset: windows`, `configuration: Release`, `jobs: 2` |
+| `ctest --preset windows-tests` | Windows low-parallel test fallback | Windows platform-neutral baseline execution | No | No | Uses `configuration: Release`, `execution.jobs: 1`, `outputOnFailure: true`; does not claim Linux-specific runtime equivalence |
 | `CTEST_PARALLEL_LEVEL=1 ./test.sh --group all` | Primary regression sweep | Linux primary validation | Partially | Optional via `--keep-data` | Includes grouped Linux execution flow |
 | `./test.sh --group persistence` | Focused restart/durability rerun | Industrialization hotspot | Partially | Optional via `--keep-data` | Main trusted-state regression bucket |
 | `./test.sh --group snapshot-recovery` | Focused snapshot/restart rerun | Industrialization hotspot | Partially | Optional via `--keep-data` | Current flaky blocker area |
@@ -68,7 +71,7 @@ cross-platform gaps are scheduled for follow-up work.
 | `./test.sh --group snapshot-catchup` | Focused catch-up rerun | US2 regression | No | Optional via `--keep-data` | Cluster consistency evidence |
 | `./test.sh --group replicator` | Focused replicator rerun | US2 regression | No | Optional via `--keep-data` | Follower synchronization evidence |
 | `./test.sh --group segment-cluster` | Focused clustered segment/snapshot stress rerun | US2/US3 regression | Partially | Optional via `--keep-data` | Main segment rollover and retained-artifact stress bucket |
-| `ctest --preset debug-tests --output-on-failure` | Platform-neutral fallback | Cross-platform baseline execution contract | No | No | Must remain valid outside Bash-first flows |
+| `ctest --preset debug-tests --output-on-failure` | Platform-neutral fallback | Cross-platform baseline execution contract | No | No | Must remain valid outside Bash-first flows; Linux fallback remains available alongside Windows preset path |
 
 ## `test.sh` Section Map
 
@@ -128,6 +131,10 @@ For these areas, Windows/macOS follow-up must either:
 
 - use the platform-neutral `ctest --preset debug-tests` path for logic-only
   regression, or
+- on Windows, use `cmake --preset windows`,
+  `cmake --build --preset windows-release`, and
+  `ctest --preset windows-tests` for platform-neutral configure/build/test
+  fallback without over-claiming Linux-specific semantics, or
 - remain explicitly deferred until runtime validation exists.
 
 ## US1 Accepted Restart Recovery Evidence

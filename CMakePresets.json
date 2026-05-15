@@ -56,6 +56,13 @@
             "displayName": "Visual Studio Community 2022 Release - amd64 - Debug",
             "configurePreset": "windows",
             "configuration": "Debug"
+        },
+        {
+            "name": "windows-release",
+            "displayName": "Visual Studio Community 2022 Release - amd64 - Release",
+            "configurePreset": "windows",
+            "configuration": "Release",
+            "jobs": 2
         }
     ],
     "testPresets": [
@@ -63,6 +70,18 @@
             "name": "debug-tests",
             "displayName": "Run Debug tests",
             "configurePreset": "debug-ninja-low-parallel",
+            "output": {
+                "outputOnFailure": true
+            }
+        },
+        {
+            "name": "windows-tests",
+            "displayName": "Run Windows Release tests",
+            "configurePreset": "windows",
+            "configuration": "Release",
+            "execution": {
+                "jobs": 1
+            },
             "output": {
                 "outputOnFailure": true
             }

@@ -15,8 +15,11 @@ Linux-specific 边界，都以它为准。
    哪些属于后续补强，哪些是 Linux-specific，哪些仍是 Windows/macOS deferred。
 2. 使用 Linux 主入口完成低并发构建和主回归。
 3. 若某个高风险区域失败，按矩阵中的 focused rerun 命令进入对应分组。
-4. 若不在 Linux 上，或只需要跑平台无关基线，使用 `ctest --preset debug-tests`
-   作为 fallback。
+4. 若当前环境是 Windows，使用 `cmake --preset windows`、
+   `cmake --build --preset windows-release` 和 `ctest --preset windows-tests`
+   完成 platform-neutral fallback。
+5. 若不在 Linux 上且不适用 Windows preset，或只需要跑平台无关基线，使用
+   `ctest --preset debug-tests` 作为 fallback。
 
 ## 3. Linux 主验证入口
 
@@ -98,7 +101,26 @@ ctest --preset debug-tests --output-on-failure
 - 当 `validation-matrix.md` 中某项被标记为 Linux-specific 时，`ctest --preset debug-tests`
   只能作为逻辑回归 fallback，不能替代 Linux runtime 语义验证。
 
-## 7. Linux-specific 测试组说明
+## 7. Windows preset fallback
+
+如果当前环境是 Windows，优先使用：
+
+```bash
+cmake --preset windows
+cmake --build --preset windows-release
+ctest --preset windows-tests
+```
+
+解释规则：
+
+- `windows` configure preset 保持现有 Visual Studio 17 2022 multi-config 配置不变。
+- `windows-release` 只补齐 Release 构建入口，使用低并发 `jobs: 2`。
+- `windows-tests` 只代表 platform-neutral fallback，使用 `configuration: Release`、
+  `execution.jobs: 1` 和 `outputOnFailure: true`。
+- 这组命令不等价于 Linux-specific crash-style、failure-injection、
+  directory sync 或 `--keep-data` 证据。
+
+## 8. Linux-specific 测试组说明
 
 以下内容必须视为 Linux-primary 或 Linux-specific 证据，而不是跨平台已完成能力：
 
@@ -112,11 +134,19 @@ ctest --preset debug-tests --output-on-failure
 - 文档、计划和任务中提到的 Linux-specific 分组，必须显式标注。
 - 这些分组在 Windows/macOS 上不能被默认为“等价完成”。
 
-## 8. Windows/macOS fallback 与 deferred 说明
+## 9. Windows/macOS fallback 与 deferred 说明
 
 当前阶段对 Windows/macOS 的要求是：
 
-- 至少能理解并使用平台无关 fallback：
+- Windows 至少能使用 preset-based fallback：
+
+```bash
+cmake --preset windows
+cmake --build --preset windows-release
+ctest --preset windows-tests
+```
+
+- 其他非 Bash 环境至少能理解并使用平台无关 fallback：
 
 ```bash
 ctest --preset debug-tests --output-on-failure
@@ -127,7 +157,7 @@ ctest --preset debug-tests --output-on-failure
 - 若后续需要更明确的非 Bash 入口，应由后续任务补充 `test.ps1` 或等价说明；
   当前阶段仍属于 planned fallback / deferred scope。
 
-## 9. 当前实现顺序
+## 10. 当前实现顺序
 
 1. 冻结已完成能力和剩余风险边界
 2. 收敛 Linux flaky 验证路径

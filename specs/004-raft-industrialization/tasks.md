@@ -373,7 +373,7 @@
   Basis: `research.md` Decision 5/6；`plan.md` W6/W7。
   Tests To Run: `./test.sh --group all`; `./test.sh --group persistence`.
 
-- [ ] T024 [P] [US3] Extend `CMakePresets.json` and adjust top-level `CMakeLists.txt` only if needed for non-hardcoded Windows configuration
+- [x] T024 [P] [US3] Extend `CMakePresets.json` and adjust top-level `CMakeLists.txt` only if needed for non-hardcoded Windows configuration
   Goal: 提供更明确的跨平台 configure/build/test 入口，减少当前仅 Linux/Ninja 友好的假设；只有在必要时才修改 `CMakeLists.txt` 去掉 Windows 本机路径耦合。
   Input: `CMakePresets.json`, top-level `CMakeLists.txt`, `contracts/validation-entrypoints.md`, `validation-matrix.md`.
   Scope: 首选修改 presets；仅在 preset 无法解决 Windows 路径耦合时，最小修改 `CMakeLists.txt` 的工具链/依赖注入方式。
