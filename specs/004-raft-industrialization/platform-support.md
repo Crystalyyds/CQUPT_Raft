@@ -134,63 +134,22 @@ cluster/runtime-heavy、durability-boundary、linux-specific-failure-injection
 - full managed sweep：
   - `windows-release-managed-tests`
   - `FAIL`
-  - `85/104` 失败
+  - 当前仍失败 `85/104`
 
-按受管目标划分后的当前状态：
+当前平台摘要只保留到这里；完整失败测试名、失败分类矩阵和 19 个受管目标的
+PASS / FAIL / BLOCKED 状态，统一收敛到：
 
-- `PASS`：
-  - `test_command`
-  - `test_state_machine`
-  - `test_min_heap_timer`
-  - `test_thread_pool`
-- `FAIL`：
-  - `test_kv_service`
-  - `test_raft_election`
-  - `test_raft_log_replication`
-  - `test_raft_commit_apply`
-  - `test_raft_split_brain`
-  - `test_t017_leader_switch_ordering`
-  - `persistence_test`
-  - `snapshot_test`
-  - `raft_integration_test`
-  - `test_raft_snapshot_catchup`
-  - `test_raft_snapshot_restart`
-  - `test_raft_snapshot_diagnosis`
-  - `test_raft_segment_storage`
-  - `test_snapshot_storage_reliability`
-  - `test_raft_replicator_behavior`
-- `BLOCKED`：
-  - 当前没有独立受管目标被记录为 `BLOCKED`
+- [windows-full-managed-failure-matrix.md](./windows-full-managed-failure-matrix.md)
 
-当前失败分类的第一版归档如下：
+当前 failure matrix 的任务分流摘要：
 
-- Windows full managed CTest entry / harness 问题：
-  - 当前不是主失败桶；preset 与 wrapper 都能把 `104` 个受管测试跑完
-- Windows runtime / timing 问题：
-  - 已暴露，典型信号包括 `FlushFileBuffers ... GetLastError=5`、
-    `create temp log dir failed`、`failed to create identity file`、
-    `no leader elected`
-- Windows election / replication / commit-apply 红灯：
-  - `test_raft_election`
-  - `test_raft_log_replication`
-  - `test_raft_commit_apply`
-  - `test_raft_split_brain`
-  - `test_t017_leader_switch_ordering`
-  - `test_raft_replicator_behavior`
-- Windows snapshot / restart / catch-up 红灯：
-  - `snapshot_test`
-  - `raft_integration_test`
-  - `test_raft_snapshot_catchup`
-  - `test_raft_snapshot_restart`
-  - `test_raft_snapshot_diagnosis`
-- Windows persistence / segment / storage 红灯：
-  - `persistence_test`
-  - `test_raft_segment_storage`
-  - `test_snapshot_storage_reliability`
-- Windows durability semantics adapt-or-defer：
-  - 仍主要体现在 exact seam 用例，例如 `MetaFileSyncFailure...`、
-    `MetaDirectorySyncFailure...`、`RestartAfterSnapshotPublishFailure...`、
-    `LogDirectoryReplaceFailure...`、`SnapshotDirectorySyncFailure...`
+- `T036`：继续确认没有残留的 preset / discover / working directory /
+  multi-config / output directory 阻塞
+- `T037`：收口 Windows runtime / timing / harness 问题
+- `T038`：收口 Windows election / replication / commit-apply 红灯
+- `T039`：收口 Windows snapshot / restart / catch-up 红灯
+- `T040`：收口 Windows persistence / segment / storage 红灯
+- `T041`：单独处理 Windows durability semantics adapt-or-defer
 
 ## 验证范围分层
 

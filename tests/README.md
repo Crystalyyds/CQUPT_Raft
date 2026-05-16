@@ -163,6 +163,8 @@ macOS 当前不在本 feature 验证范围内。
 - 它们不等价于 Linux 当前 `104/104` managed 结果。
 - 它们也不把 Linux-specific durability / failure-injection 改写成 Windows
   已等价验证。
+- 当前完整失败明细只保留在
+  [../specs/004-raft-industrialization/windows-full-managed-failure-matrix.md](../specs/004-raft-industrialization/windows-full-managed-failure-matrix.md)。
 
 ## 4. 哪些受管测试不进入 Windows fallback
 
@@ -239,9 +241,10 @@ CTEST_PARALLEL_LEVEL=1 ./test.sh --group all
 当前 Linux 已知状态：
 
 - `./test.sh --group persistence` 已通过
-- `ctest --preset debug-tests --output-on-failure` 当前仍有
-  cluster/runtime-heavy 现存红灯
-- 这些现存红灯不在本 README 修复范围内
+- `ctest --preset debug-tests --output-on-failure` 当前 `104/104` PASS
+- Linux full managed CTest 当前已全绿：
+  - `platform-neutral` 100 tests PASS
+  - `durability-boundary` 4 tests PASS
 
 失败后建议顺序：
 

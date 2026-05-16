@@ -549,6 +549,12 @@
   Windows/macOS Fallback: Yes, 必须继续保留“Windows 不等价 Linux-specific durability”边界。
   Basis: `spec.md` FR-008/FR-011；`plan.md` W7/W8；当前 Phase 7 目标。
   Tests To Run: None; 复用 T034 输出。
+  Result Snapshot:
+  - 复用 `T034` 的 Windows full managed 日志，没有重新运行测试。
+  - 新增 `specs/004-raft-industrialization/windows-full-managed-failure-matrix.md` 作为唯一完整失败清单。
+  - Windows conservative baseline 仍为 `PASS`；Windows full managed 仍为 `FAIL (85)`。
+  - 当前失败已收敛为：`T037` runtime / harness、`T038` election / replication / commit-apply、`T039` snapshot / restart / catch-up、`T040` persistence / segment / storage、`T041` durability adapt-or-defer。
+  - 主文档只保留摘要和链接，不再重复粘贴 `85` 个失败测试名。
 
 - [ ] T036 Fix Windows full managed CTest preset / runner / discover blockers before touching production logic
   Goal: 先排除 Windows full managed CTest 入口层问题，避免把 preset、working directory、multi-config、discover、wrapper、filter 或结果采集错误误判为 Raft 逻辑缺陷。

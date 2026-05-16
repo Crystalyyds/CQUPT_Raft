@@ -94,6 +94,8 @@
     `TimerSchedulerTest` / `ThreadPoolTest` 的保守子集过滤。
   - 它们只代表“Windows full managed sweep 入口已存在”，不代表已经通过，
     也不代表与 Linux 当前 `104/104` 结果等价。
+  - 当前完整失败明细、失败分类和受管目标状态统一见
+    [../windows-full-managed-failure-matrix.md](../windows-full-managed-failure-matrix.md)。
   - 即使 full managed 入口存在，也不得把 Linux-specific durability /
     failure-injection / crash-style 语义写成 Windows 已等价验证。
 

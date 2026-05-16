@@ -91,7 +91,7 @@ CTEST_PARALLEL_LEVEL=1 ./test.sh --group <group> --keep-data
   中的 group 解释、rerun 命令和 Linux-specific 边界
 - [platform-support.md](./platform-support.md)
   中的平台支持范围与 Windows fallback 边界
-- [tests/README.md](/home/yangjilei/Code/C++/CQUPT_Raft/tests/README.md)
+- [tests/README.md](../../tests/README.md)
   中的测试角色说明：哪些是受管回归、哪些是 manual-only /
   diagnostic-only、哪些不进入 Windows fallback
 
@@ -222,6 +222,8 @@ ctest --preset windows-release-managed-tests
 - 这条入口运行完整受管 CTest 目标集合。
 - 它只是新增的验证入口，不代表已经通过。
 - 它不等价于 Linux 当前 `104/104` managed 结果。
+- 当前失败明细、失败分类和受管目标状态统一见
+  [windows-full-managed-failure-matrix.md](./windows-full-managed-failure-matrix.md)。
 
 ## 9. 哪些测试属于 Windows fallback，哪些不属于
 
@@ -250,7 +252,7 @@ Windows fallback 当前只跑保守 baseline：
 - `RaftReplicatorBehaviorTest`
 - `RaftIntegrationTest`
 
-更完整的测试角色边界见 [tests/README.md](/home/yangjilei/Code/C++/CQUPT_Raft/tests/README.md)。
+更完整的测试角色边界见 [tests/README.md](../../tests/README.md)。
 
 ## 10. Linux-specific 测试组说明
 
@@ -295,7 +297,7 @@ ctest --preset debug-tests --output-on-failure
 - 它适合人工查看 marker、manifest 和 retained artifacts
 - 它不属于 Linux 主回归入口，也不属于 Windows platform-neutral fallback
 
-更完整的测试角色说明见 [tests/README.md](/home/yangjilei/Code/C++/CQUPT_Raft/tests/README.md)。
+更完整的测试角色说明见 [tests/README.md](../../tests/README.md)。
 
 ## 13. 当前实现顺序
 
