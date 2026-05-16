@@ -537,7 +537,7 @@
   - Windows full managed 当前为 `FAIL (85/104)`。
   - 形式化失败矩阵、失败分类和 19 个受管目标的 PASS / FAIL / BLOCKED 状态已沉淀到 `validation-matrix.md` 与 `platform-support.md`。
 
-- [ ] T035 [P] Classify the first Windows full-sweep failures into an actionable matrix
+- [x] T035 [P] Classify the first Windows full-sweep failures into an actionable matrix
   Goal: 把 T034 暴露的 Windows full managed CTest 红灯按问题类型收口成可执行的失败矩阵，而不是笼统写成“Windows 还需 follow-up”。
   Input: T034 执行结果，`specs/004-raft-industrialization/validation-matrix.md`, `specs/004-raft-industrialization/platform-support.md`, `specs/004-raft-industrialization/quickstart.md`, `specs/004-raft-industrialization/contracts/validation-entrypoints.md`.
   Scope: 只允许修改文档与失败矩阵归类，不在本任务内修代码。
@@ -556,7 +556,7 @@
   - 当前失败已收敛为：`T037` runtime / harness、`T038` election / replication / commit-apply、`T039` snapshot / restart / catch-up、`T040` persistence / segment / storage、`T041` durability adapt-or-defer。
   - 主文档只保留摘要和链接，不再重复粘贴 `85` 个失败测试名。
 
-- [ ] T036 Fix Windows full managed CTest preset / runner / discover blockers before touching production logic
+- [x] T036 Fix Windows full managed CTest preset / runner / discover blockers before touching production logic
   Goal: 先排除 Windows full managed CTest 入口层问题，避免把 preset、working directory、multi-config、discover、wrapper、filter 或结果采集错误误判为 Raft 逻辑缺陷。
   Input: T033-T035 输出，`CMakePresets.json`, `test.ps1`, `tests/CMakeLists.txt`, top-level `CMakeLists.txt`（仅当 preset/plumbing 无法单独解决时）, 相关 validation docs。
   Scope: 只允许修改 preset、wrapper、CTest discover / 标签组织、必要的构建脚本路径与文档；禁止修改 `modules/raft/**` 生产代码；禁止借由放宽断言或删除目标来“消灭”红灯。
@@ -568,6 +568,14 @@
   Windows/macOS Fallback: Yes, 这是 full managed 入口收口任务。
   Basis: `validation-entrypoints.md` Windows preset contract；`platform-support.md` 当前 Windows 入口只到 conservative baseline。
   Tests To Run: `cmake --preset windows`; `cmake --build --preset windows-release`; `ctest --preset windows-release-tests`; `ctest --preset windows-release-managed-tests`.
+  Result: No-op / confirmed no entry blocker.
+  Execution Note:
+  - 复用 `T033-T035` 已有配置与日志，没有重新运行 Windows 测试。
+  - `windows-release-managed-tests` / `windows-debug-managed-tests` 均存在，且保持 full managed 语义。
+  - `windows-release-tests` / `windows-debug-tests` 仍保留 conservative baseline 过滤。
+  - `test.ps1 -Managed` 调用 `windows-release-managed-tests`；`test.ps1 -All` 仍调用 `windows-release-tests`。
+  - 现有日志显示 full managed 已 discover 并执行完整 `104` 个受管测试；当前 `85` 项失败属于测试运行红灯，不是 preset / discover / wrapper 阻塞。
+  - 剩余红灯继续转交 `T037-T041`。
 
 - [ ] T037 Stabilize Windows-only test harness assumptions for cluster/runtime-heavy coverage before changing Raft logic
   Goal: 如果 T035 证明某些红灯来自 Windows 下的 test harness、timeout、路径、临时目录、进程收尾或 file-lock 假设，而不是 Raft 业务逻辑，则先在测试层收口这些运行时假设。

@@ -29,7 +29,7 @@
 
 | 分类 | 当前状态 | 失败数量 | 典型信号 | 对应后续任务 |
 |------|----------|----------|----------|--------------|
-| Windows full managed CTest entry / harness 问题 | 当前不是主失败桶 | 0 | `104` 个受管测试都已 discover 并执行；preset / wrapper 不是“没跑起来” | T036 |
+| Windows full managed CTest entry / harness 问题 | 已确认无独立阻塞 | 0 | `104` 个受管测试都已 discover 并执行；preset / wrapper 不是“没跑起来” | T036 |
 | Windows runtime / timing / harness 问题 | FAIL | 7 | `FlushFileBuffers ... GetLastError=5`、`create temp log dir failed`、`failed to create identity file`、`no leader elected` | T037 |
 | Windows election / replication / commit-apply 红灯 | FAIL | 17 | election / replication / commit-apply 断言失败，且当前不能写成 Windows 已收口 | T038 |
 | Windows snapshot / restart / catch-up 红灯 | FAIL | 18 | snapshot restore、restart replay、catch-up sequencing、diagnosis 断言失败 | T039 |
@@ -72,6 +72,11 @@
 
 - `ctest --preset windows-release-managed-tests` 能执行完整 `104` 个受管测试
 - `.\test.ps1 -Managed` 复现同一组 `85` 个失败
+
+T036 结论：
+
+- 当前可记为 `confirmed no entry blocker / no-op`
+- 现有红灯继续转交 `T037-T041`
 
 ### 2. Windows runtime / timing / harness 问题
 

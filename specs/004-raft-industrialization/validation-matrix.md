@@ -236,6 +236,33 @@ cross-platform gaps are scheduled for follow-up work.
 | 失败详情 | 单独维护 | 详见 [windows-full-managed-failure-matrix.md](./windows-full-managed-failure-matrix.md) |
 | 当前主要后续任务 | 已分流 | `T036` 入口检查、`T037` runtime/harness、`T038` election/replication/commit-apply、`T039` snapshot/restart/catch-up、`T040` persistence/segment/storage、`T041` durability adapt-or-defer |
 
+### T036 Windows Full Managed Entrypoint Check
+
+本次 `T036` 复用 `T033-T035` 已有配置与日志，没有重新运行 Windows 测试。
+
+当前确认结果：
+
+- `windows-release-managed-tests` preset 存在，且保持 full managed 语义
+- `windows-release-managed-tests` / `windows-debug-managed-tests` 都未使用
+  baseline 子集过滤
+- `windows-release-tests` / `windows-debug-tests` 仍保留 conservative baseline
+  过滤
+- `test.ps1 -Managed` 确实调用 `windows-release-managed-tests`
+- `test.ps1 -All` 仍调用 conservative baseline `windows-release-tests`
+- Visual Studio multi-config 路径继续通过 `configuration: Release` /
+  `configuration: Debug` 选配置
+- full managed preset 当前 `execution.jobs` 为 `1`，`outputOnFailure` 已开启
+- `gtest_discover_tests(... DISCOVERY_MODE PRE_TEST ...)` 与当前 label 说明
+  没有阻塞 full managed 测试发现
+- 现有日志显示 full managed 已 discover 并执行完整 `104` 个受管测试；
+  当前 `85` 项失败属于测试运行红灯，而不是 discover / preset / wrapper
+  阻塞
+
+T036 当前结论：
+
+- `confirmed no entry blocker / no-op`
+- 剩余红灯继续转交 `T037-T041`
+
 ## CTest Label Matrix
 
 | Label | Meaning | Platform scope | Interpretation boundary |

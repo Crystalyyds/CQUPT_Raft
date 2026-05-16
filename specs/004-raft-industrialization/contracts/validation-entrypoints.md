@@ -94,6 +94,8 @@
     `TimerSchedulerTest` / `ThreadPoolTest` 的保守子集过滤。
   - 它们只代表“Windows full managed sweep 入口已存在”，不代表已经通过，
     也不代表与 Linux 当前 `104/104` 结果等价。
+  - 当前 `T036` 已确认没有独立的 full managed 入口层阻塞；剩余红灯继续按
+    `T037-T041` 的 runtime / logic / storage / durability 分类处理。
   - 当前完整失败明细、失败分类和受管目标状态统一见
     [../windows-full-managed-failure-matrix.md](../windows-full-managed-failure-matrix.md)。
   - 即使 full managed 入口存在，也不得把 Linux-specific durability /

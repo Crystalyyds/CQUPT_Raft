@@ -143,8 +143,8 @@ PASS / FAIL / BLOCKED 状态，统一收敛到：
 
 当前 failure matrix 的任务分流摘要：
 
-- `T036`：继续确认没有残留的 preset / discover / working directory /
-  multi-config / output directory 阻塞
+- `T036`：已确认当前没有独立的 preset / discover / working directory /
+  multi-config / test filter / wrapper 阻塞，可按 no-op 处理
 - `T037`：收口 Windows runtime / timing / harness 问题
 - `T038`：收口 Windows election / replication / commit-apply 红灯
 - `T039`：收口 Windows snapshot / restart / catch-up 红灯
