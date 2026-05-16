@@ -191,6 +191,150 @@ cross-platform gaps are scheduled for follow-up work.
   - Windows 更深的 runtime validation、durability 等价语义与 CI
     扩展继续保留为 follow-up，不写成已完成。
 
+### T034 Windows Full Managed First Sweep
+
+本次 `T034` 直接复用 `T033` 已产生的 Windows full managed 日志：
+
+- `tmp/windows-release-managed-tests.log`
+- `tmp/test-ps1-managed.log`
+
+本次没有重新运行 Windows full managed 测试；矩阵结论全部来自上述日志。
+
+当前记录的 Windows 状态分为两层：
+
+- conservative baseline：
+  - `ctest --preset windows-release-tests`
+  - 保持 `PASS`
+  - 当前仍是 `18/18` tests passed
+- full managed sweep：
+  - `ctest --preset windows-release-managed-tests`
+  - `.\test.ps1 -Managed`
+  - 两条入口都收敛到同一组结果：`104` 个受管测试里 `19` 个通过、`85` 个失败
+
+Windows full managed 当前失败测试名如下：
+
+- `RaftKvServiceTest.SingleNodeSupportsPutGetDeleteAndStatusHealth`
+- `RaftKvServiceTest.ThreeNodeFollowerRedirectsWritesAndReadsToLeader`
+- `RaftElectionTest.ThreeNodeClusterElectsExactlyOneLeader`
+- `RaftElectionTest.FollowerRejectsClientProposeAfterLeaderIsElected`
+- `RaftLogReplicationTest.LeaderProposeReplicatesLogToAllNodes`
+- `RaftLogReplicationTest.MultipleSequentialEntriesStayConsistentAcrossCluster`
+- `RaftCommitApplyTest.CommitAndApplyIndexesAdvanceAfterSuccessfulPropose`
+- `RaftCommitApplyTest.DeleteCommandIsAppliedToAllNodes`
+- `RaftSplitBrainTest.MinorityLeaderTimesOutAndDoesNotApplyUncommittedCommand`
+- `RaftSplitBrainTest.LeaderStepsDownWhenHigherTermAppendEntriesArrives`
+- `RaftSplitBrainTest.StaleAppendEntriesIsRejectedAfterNodeObservesHigherTerm`
+- `RaftSplitBrainTest.SameTermSecondCandidateVoteIsRejected`
+- `RaftSplitBrainTest.StaleCandidateVoteRequestIsRejectedEvenWithHigherTerm`
+- `RaftSplitBrainTest.AppendEntriesRejectionIncludesFastBacktrackHint`
+- `RaftSplitBrainTest.InstallSnapshotDiscardsSuffixWhenBoundaryTermDiffers`
+- `RaftLeaderSwitchOrderingTest.CommittedStateSurvivesLeaderSwitchAndNewLeaderContinuesReplication`
+- `RaftLeaderSwitchOrderingTest.LaggingFollowerCatchesUpDuringLeaderSwitchWithoutCommitApplyReordering`
+- `PersistenceTest.FullClusterRestartRecovery`
+- `PersistenceTest.RestartedFollowerCatchesUp`
+- `PersistenceTest.ColdRestartPreservesPersistedHardStateBeforeStart`
+- `PersistenceTest.ColdRestartClampsCommitAndApplyBoundariesToLastLogIndex`
+- `PersistenceTest.ColdRestartUsesPreviouslyTrustedMetaBoundaryWhenNewLogPublishesBeforeMeta`
+- `PersistenceTest.ColdRestartClampsCommitIndexToLastLogAndReplaysCommittedPrefix`
+- `PersistenceTest.ColdRestartClampsLastAppliedToCommitIndexWhenAppliedExceedsCommit`
+- `PersistenceTest.ColdRestartClampsLastAppliedToTrustedLogPrefixWhenAppliedPointsPastAvailableLog`
+- `PersistenceTest.ColdRestartUsesOlderMetaTermAndVoteWhenNewerLogTreeIsVisible`
+- `PersistenceTest.NewMetaWithOldLogBoundaryRejectsUntrustedCurrentTermAndVote`
+- `PersistenceTest.MetaFileSyncFailureNeedsExactFailureInjectionSeam`
+- `PersistenceTest.MetaDirectorySyncFailureNeedsExactFailureInjectionSeam`
+- `RaftSnapshotRecoveryTest.SavesSnapshotAndRestoresAfterRestart`
+- `RaftIntegrationTest.ElectsSingleLeaderInThreeNodeCluster`
+- `RaftIntegrationTest.ReplicatesSetAndDeleteCommandsToAllNodes`
+- `RaftIntegrationTest.ElectsNewLeaderAfterCurrentLeaderStops`
+- `RaftIntegrationTest.GeneratesSnapshotMetaFileAfterEnoughAppliedLogs`
+- `RaftIntegrationTest.LaggingFollowerInstallsSnapshotAndReplaysTailDeleteAcrossCompactionBoundary`
+- `RaftSnapshotCatchupTest.RestartedFollowerCatchesUpLargeGapWithBatchedAppendEntries`
+- `RaftSnapshotCatchupTest.LaggingFollowerReplaysLiveLogWithoutBreakingCommittedDeleteOrdering`
+- `RaftSnapshotCatchupTest.RestartedFollowerInstallsSnapshotWhenLeaderCompactedLogs`
+- `RaftSnapshotCatchupTest.FollowerContinuesReplicatingLogsAfterInstallingSnapshot`
+- `RaftSnapshotRestartTest.FollowerKeepsStateAfterInstallSnapshotAndRestart`
+- `RaftSnapshotRestartTest.LeaderKeepsCompactedSnapshotStateAfterRestart`
+- `RaftSnapshotRestartTest.FullClusterRestartsAfterSnapshotAndContinuesWriting`
+- `RaftSnapshotRestartTest.SnapshotAndPostSnapshotLogsRecoverAfterFullRestart`
+- `RaftSnapshotRecoveryTest.FullRestartReplaysSnapshotTailWithoutLosingDeletesOrOverwrites`
+- `RaftSnapshotRecoveryTest.RestartedFollowerAppliesCommittedTailExactlyOnceAfterSnapshotLoad`
+- `RaftSnapshotRecoveryTest.StandaloneRestartFallsBackToOlderTrustedSnapshotWhenNewestSnapshotIsCorrupted`
+- `RaftSnapshotRecoveryTest.RestartAfterSnapshotPublishFailureNeedsExactFailureInjectionSeam`
+- `RaftSnapshotRecoveryTest.StandaloneRestartRejectsMetadataMismatchedVisibleSnapshotAndKeepsTrustedBoundary`
+- `RaftSnapshotRecoveryTest.AllPublishedSnapshotsInvalidYieldNoTrustedSnapshot`
+- `RaftSnapshotDiagnosisTest.RestartedSingleNodeLoadsSnapshotAndTailLogsWithoutPeers`
+- `RaftSnapshotDiagnosisTest.CompactedClusterReplicatesNewLogAfterRestartedLeaderStepsDown`
+- `RaftSnapshotDiagnosisTest.RestartedSingleNodeReplaysAppliedTailAfterRejectingCorruptedNewestSnapshot`
+- `RaftSnapshotDiagnosisTest.RestartedSingleNodeSkipsMetadataMismatchedVisibleSnapshotAndReplaysCommittedTail`
+- `RaftSegmentStorageTest.WritesMultipleSegmentFilesUnderBuildDirectory`
+- `RaftSegmentStorageTest.AutomaticallyDeletesObsoleteSegmentsAfterCompactionSave`
+- `RaftSegmentStorageTest.TruncatesCorruptedSegmentTailDuringRecovery`
+- `RaftSegmentStorageTest.TruncatesPartialSegmentHeaderDuringRecovery`
+- `RaftSegmentStorageTest.SaveDoesNotLeaveTemporaryOrBackupLogDirectories`
+- `RaftSegmentStorageTest.SavePublishesMetaFileWithoutLeavingMetaTempFile`
+- `RaftSegmentStorageTest.RecoveryIgnoresTemporaryPublishArtifacts`
+- `RaftSegmentStorageTest.MetaAndLogPublishWindowUsesOnlyTrustedBoundary`
+- `RaftSegmentStorageTest.MissingFirstSegmentFailsBeforeTrustingPublishedBoundary`
+- `RaftSegmentStorageTest.FinalSegmentTailTruncateKeepsTrustedLogPrefixAndClampsCommitApply`
+- `RaftSegmentStorageTest.LogDirectoryReplaceFailureNeedsExactFailureInjectionSeam`
+- `RaftSegmentStorageTest.LogDirectorySyncFailureNeedsExactFailureInjectionSeam`
+- `RaftSegmentStorageTest.FinalSegmentPartialWriteNeedsExactFailureInjectionSeam`
+- `RaftSegmentStorageTest.MissingMetaFileCausesLoadToReportNoPersistedState`
+- `RaftSegmentStorageTest.CorruptedMetaFileFailsLoad`
+- `RaftSegmentStorageTest.UnsupportedMetaVersionFailsLoadWithPathAndVersion`
+- `RaftSegmentStorageTest.InconsistentMetaLogBoundaryFailsBeforeTrustingSegments`
+- `RaftSegmentStorageTest.CorruptedEarlierSegmentTailCleansLaterSegmentsAndReportsDiagnostics`
+- `RaftSegmentStorageTest.RaftClusterGeneratesManySnapshotsAndSegmentLogsUnderBuildDirectory`
+- `SnapshotStorageReliabilityTest.SavesSnapshotAsDirectoryWithDataAndMeta`
+- `SnapshotStorageReliabilityTest.PublishesSnapshotWithCompatibleFinalLayout`
+- `SnapshotStorageReliabilityTest.IgnoresStagingAndIncompleteSnapshotDirectories`
+- `SnapshotStorageReliabilityTest.ReportsValidationIssuesForSkippedSnapshotEntries`
+- `SnapshotStorageReliabilityTest.FallsBackToOlderSnapshotWhenNewestIsCorrupted`
+- `SnapshotStorageReliabilityTest.AllInvalidSnapshotsReturnNoTrustedSnapshotWithDiagnostics`
+- `SnapshotStorageReliabilityTest.SameIndexSameTermSaveIsIdempotent`
+- `SnapshotStorageReliabilityTest.PrunesOldSnapshotDirectoriesByIndex`
+- `SnapshotStorageReliabilityTest.StagedSnapshotPublishFailureNeedsExactFailureInjectionSeam`
+- `SnapshotStorageReliabilityTest.SnapshotDirectorySyncFailureNeedsExactFailureInjectionSeam`
+- `SnapshotStorageReliabilityTest.SnapshotPruneRemoveFailureNeedsExactFailureInjectionSeam`
+- `RaftReplicatorBehaviorTest.SlowFollowerDoesNotBlockMajorityCommit`
+- `RaftReplicatorBehaviorTest.SlowFollowerCatchesUpWhileLeaderKeepsAcceptingNewLogs`
+
+Windows full managed 失败分类矩阵：
+
+| 分类 | 当前状态 | 涉及受管目标 | 当前证据 | 后续任务 |
+|------|----------|--------------|----------|----------|
+| Windows full managed CTest entry / harness 问题 | 当前未命中为主失败桶 | 无单独受管目标被标成 BLOCKED | `windows-release-managed-tests` 能完整跑到 `104` 个测试；`.\test.ps1 -Managed` 复现同一组 `85` 个失败，说明 preset / wrapper 入口存在且可执行 | T036 |
+| Windows runtime / timing 问题 | 已暴露 | `test_kv_service`, `raft_integration_test`, `test_raft_snapshot_catchup`, `test_raft_replicator_behavior`，并对 cluster-style 目标形成交叉影响 | 日志中出现 `FlushFileBuffers ... GetLastError=5`、`create temp log dir failed`、`failed to create identity file`、`no leader elected` | T035, T037 |
+| Windows election / replication / commit-apply 红灯 | 已暴露 | `test_raft_election`, `test_raft_log_replication`, `test_raft_commit_apply`, `test_raft_split_brain`, `test_t017_leader_switch_ordering`, `test_raft_replicator_behavior` | 相关测试全部 `FAIL`；当前仍不能把这些平台无关 Raft 逻辑写成 Windows 已收口 | T035, T038 |
+| Windows snapshot / restart / catch-up 红灯 | 已暴露 | `snapshot_test`, `raft_integration_test`, `test_raft_snapshot_catchup`, `test_raft_snapshot_restart`, `test_raft_snapshot_diagnosis` | snapshot / restart / catch-up 相关目标当前全部 `FAIL`；`test_raft_snapshot_diagnosis` 还带 `durability-boundary` 解释边界 | T035, T039 |
+| Windows persistence / segment / storage 红灯 | 已暴露 | `persistence_test`, `test_raft_segment_storage`, `test_snapshot_storage_reliability` | storage / trusted-state / segment / snapshot storage 相关目标当前全部 `FAIL` | T035, T040 |
+| Windows durability semantics adapt-or-defer | 已暴露，且不能与 Linux 等价混写 | `persistence_test`, `snapshot_test`, `test_raft_segment_storage`, `test_snapshot_storage_reliability` | exact seam 用例仍失败，例如 `MetaFileSyncFailureNeedsExactFailureInjectionSeam`、`MetaDirectorySyncFailureNeedsExactFailureInjectionSeam`、`RestartAfterSnapshotPublishFailureNeedsExactFailureInjectionSeam`、`LogDirectoryReplaceFailureNeedsExactFailureInjectionSeam`、`SnapshotDirectorySyncFailureNeedsExactFailureInjectionSeam` | T035, T041 |
+| 其他 / 待进一步分类 | 当前无新增独立桶 | 无 | 当前 `85` 个失败已能先落到上面几类，不需要额外创建新桶 | T035 |
+
+Windows 受管目标 PASS / FAIL / BLOCKED 现状矩阵：
+
+| 受管目标 | 状态 | 失败数 | 主要归类 | 备注 |
+|----------|------|--------|----------|------|
+| `test_command` | PASS | 0 | N/A | full managed 下保持通过 |
+| `test_state_machine` | PASS | 0 | N/A | full managed 下保持通过 |
+| `test_min_heap_timer` | PASS | 0 | N/A | full managed 下保持通过 |
+| `test_thread_pool` | PASS | 0 | N/A | full managed 下保持通过 |
+| `test_kv_service` | FAIL | 2 | Windows runtime / timing 问题 | `DataDirectoryIdentityMismatchIsRejected` 通过；其余 2 个失败 |
+| `test_raft_election` | FAIL | 2 | Windows election / replication / commit-apply 红灯 | 2/2 失败 |
+| `test_raft_log_replication` | FAIL | 2 | Windows election / replication / commit-apply 红灯 | 2/2 失败 |
+| `test_raft_commit_apply` | FAIL | 2 | Windows election / replication / commit-apply 红灯 | 2/2 失败 |
+| `test_raft_split_brain` | FAIL | 7 | Windows election / replication / commit-apply 红灯 | 7/7 失败 |
+| `test_t017_leader_switch_ordering` | FAIL | 2 | Windows election / replication / commit-apply 红灯 | 2/2 失败 |
+| `persistence_test` | FAIL | 12 | Windows persistence / segment / storage 红灯 | exact durability seam 子用例同时落入 adapt-or-defer |
+| `snapshot_test` | FAIL | 7 | Windows snapshot / restart / catch-up 红灯 | 包含 `RestartAfterSnapshotPublishFailureNeedsExactFailureInjectionSeam` |
+| `raft_integration_test` | FAIL | 5 | Windows snapshot / restart / catch-up 红灯 | cluster/runtime-heavy 交叉影响明显 |
+| `test_raft_snapshot_catchup` | FAIL | 4 | Windows snapshot / restart / catch-up 红灯 | 4/4 失败 |
+| `test_raft_snapshot_restart` | FAIL | 4 | Windows snapshot / restart / catch-up 红灯 | 4/4 失败 |
+| `test_raft_snapshot_diagnosis` | FAIL | 4 | Windows snapshot / restart / catch-up 红灯 | 4/4 失败；标签属于 `durability-boundary` |
+| `test_raft_segment_storage` | FAIL | 19 | Windows persistence / segment / storage 红灯 | exact seam 子用例同时落入 adapt-or-defer |
+| `test_snapshot_storage_reliability` | FAIL | 11 | Windows persistence / segment / storage 红灯 | exact seam 子用例同时落入 adapt-or-defer |
+| `test_raft_replicator_behavior` | FAIL | 2 | Windows election / replication / commit-apply 红灯 | runtime / path 症状与 `no leader elected` 同时出现 |
+
 ## CTest Label Matrix
 
 | Label | Meaning | Platform scope | Interpretation boundary |

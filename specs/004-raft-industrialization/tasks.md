@@ -519,7 +519,7 @@
   Basis: `plan.md` W6/W8；`platform-support.md` Windows 未验证范围；`validation-matrix.md` R6/R7。
   Tests To Run: `cmake --preset windows`; `cmake --build --preset windows-release`; `ctest --preset windows-release-tests`; `ctest --preset windows-release-managed-tests`.
 
-- [ ] T034 Run the first Windows full managed CTest sweep and capture the uncovered target matrix
+- [x] T034 Run the first Windows full managed CTest sweep and capture the uncovered target matrix
   Goal: 用真实 Windows full managed CTest 执行结果建立第一版覆盖现状，明确 conservative baseline `18/18` 之外其余受管目标的真实状态。
   Input: T033 输出，`tests/README.md`, `tests/CMakeLists.txt`, `specs/004-raft-industrialization/validation-matrix.md`, `specs/004-raft-industrialization/platform-support.md`.
   Scope: 只执行 Windows configure/build/full managed CTest，并记录结果；本任务不改生产代码、不改测试语义。
@@ -531,6 +531,11 @@
   Windows/macOS Fallback: Yes, 但不得把 conservative baseline 结果改写成 full pass。
   Basis: `tests/README.md` 受管目标清单；`platform-support.md` Windows 未验证范围；当前 Linux `104/104` 与 Windows `18/18` 的证据差距。
   Tests To Run: `cmake --preset windows`; `cmake --build --preset windows-release`; `ctest --preset windows-release-managed-tests`.
+  Result Snapshot:
+  - 复用 `T033` 已生成的 `tmp/windows-release-managed-tests.log` 与 `tmp/test-ps1-managed.log`，未重新运行 Windows full managed 测试。
+  - Windows conservative baseline 仍为 `PASS (18/18)`。
+  - Windows full managed 当前为 `FAIL (85/104)`。
+  - 形式化失败矩阵、失败分类和 19 个受管目标的 PASS / FAIL / BLOCKED 状态已沉淀到 `validation-matrix.md` 与 `platform-support.md`。
 
 - [ ] T035 [P] Classify the first Windows full-sweep failures into an actionable matrix
   Goal: 把 T034 暴露的 Windows full managed CTest 红灯按问题类型收口成可执行的失败矩阵，而不是笼统写成“Windows 还需 follow-up”。
