@@ -178,4 +178,6 @@ linux-specific-failure-injection 混为一谈。
 - Windows 仍是当前保守 fallback 平台。
 - Windows fallback 不等价于 Linux-specific durability / failure-injection /
   crash-style 验收。
+- 当前 `US3` 的入口文档和状态说明已经收口；剩余 cluster-style、
+  durability 语义扩大验证和 CI 扩展继续保留为 follow-up。
 - 当前不记录 macOS 已验证；macOS 仍不在本 feature 验证范围内。

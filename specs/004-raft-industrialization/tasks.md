@@ -412,7 +412,7 @@
   Basis: `plan.md` W6；`contracts/validation-entrypoints.md` Test Grouping Contract。
   Tests To Run: `ctest --preset debug-tests --output-on-failure`; `./test.sh --group all`.
 
-- [x T027 [P] [US3] Add `specs/004-raft-industrialization/platform-support.md`
+- [x] T027 [P] [US3] Add `specs/004-raft-industrialization/platform-support.md`
   Goal: 建立平台能力矩阵，明确 build、path、flush/sync、rename、temp dir、signal/process 测试在 Linux/Windows/macOS 的当前证据与下一步。
   Input: `validation-matrix.md`, `plan.md`, `data-model.md`, top-level `CMakeLists.txt`, `test.sh`.
   Scope: 新增 spec 文档，不改生产代码。
@@ -425,7 +425,7 @@
   Basis: `data-model.md` PlatformSupportExpectation；`plan.md` W7/W8；用户跨平台要求。
   Tests To Run: None; 文档任务。
 
-- [ ] T028 [US3] Update `specs/004-raft-industrialization/quickstart.md` and `tests/README.md`
+- [x] T028 [US3] Update `specs/004-raft-industrialization/quickstart.md` and `tests/README.md`
   Goal: 给维护者一份清晰的“从哪跑、失败后看哪、哪些数据可保留、哪些测试不进平台无关回归”的说明。
   Input: `quickstart.md`, `tests/README.md`, `validation-matrix.md`, `platform-support.md`.
   Scope: 仅修改文档。
@@ -438,7 +438,7 @@
   Basis: `research.md` Decision 5/7；`plan.md` W6/W7/W8。
   Tests To Run: None; 文档任务。
 
-- [ ] T029 [US3] Run the Linux primary path and platform-neutral fallback and record interpretation rules in `specs/004-raft-industrialization/validation-matrix.md`
+- [x] T029 [US3] Run the Linux primary path and platform-neutral fallback and record interpretation rules in `specs/004-raft-industrialization/validation-matrix.md`
   Goal: 用真实执行结果确认维护者看到失败时如何判断是 Linux-specific、平台无关、还是 deferred runtime gap。
   Input: `validation-matrix.md`, `quickstart.md`, `test.sh`, `CMakePresets.json`.
   Scope: 执行现有测试并更新文档；不改生产代码。

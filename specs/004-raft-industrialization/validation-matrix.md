@@ -41,8 +41,8 @@ cross-platform gaps are scheduled for follow-up work.
 | P1 | Catch-up after lag, compaction, restart, and snapshot handoff | Implemented but needs stronger proof | `plan.md` W4, current gap classification `B/C` | `./test.sh --group snapshot-catchup`, `integration`, `replicator` | No | Same tests should remain runnable via CTest |
 | P1 | Leader switch and commit/apply ordering under churn | Implemented but still risky | `plan.md` W4, current gap classification `B/C` | `./test.sh --group replication`, `election`, `replicator` | No | Same tests should remain runnable via CTest |
 | P1 | State-machine apply/replay consistency after snapshot/restart | Implemented but needs stronger proof | `plan.md` W5 | `./test.sh --group snapshot-recovery`, targeted `ctest -R` on state machine and integration tests | No | Same tests should remain runnable via CTest |
-| P2 | Unified validation entrypoints and grouped test guidance | Windows preset-based fallback and PowerShell wrapper added | Current `test.sh`, `test.ps1`, `CMakePresets.json`, `plan.md` W6 | `./test.sh --group all`, `.\test.ps1 -All`, `ctest --preset debug-tests`, `ctest --preset windows-release-tests`, `ctest --preset windows-debug-tests` | Partially | PowerShell fallback is now available; Windows test preset 已收敛到 `platform-neutral-fallback` 保守子集，当前通过保守 test-name 子集落实，Linux-specific runtime evidence 仍需显式边界说明 |
-| P3 | Failure localization and platform-support documentation | Incomplete | `plan.md` W7/W8 | Spec docs and grouped rerun commands | Partially | Explicit support matrix and follow-up notes required |
+| P2 | Unified validation entrypoints and grouped test guidance | Completed for current documented scope | Current `test.sh`, `test.ps1`, `CMakePresets.json`, `plan.md` W6 | `./test.sh --group all`, `.\test.ps1 -All`, `ctest --preset debug-tests`, `ctest --preset windows-release-tests`, `ctest --preset windows-debug-tests` | Partially | PowerShell fallback is now available; Windows test preset 已收敛到 `platform-neutral-fallback` 保守子集，当前通过保守 test-name 子集落实，Linux-specific runtime evidence 仍需显式边界说明 |
+| P3 | Failure localization and platform-support documentation | Completed for current US3 scope | `plan.md` W7/W8 | Spec docs and grouped rerun commands | Partially | Platform support, quickstart, tests README, and final US3 interpretation rules are now documented; remaining items stay in explicit follow-up |
 | P4 | Windows/macOS deeper runtime validation and CI expansion | Deferred follow-up | `spec.md` platform scope, `plan.md` W8 | Future runtime validation | No | This row is itself the fallback and follow-up definition |
 
 ### Explicitly Deferred (Not In Current Implementation Scope)
@@ -98,6 +98,51 @@ cross-platform gaps are scheduled for follow-up work.
   Linux-primary 主验收解释
 - Windows fallback 仍是保守 baseline，不记录为 Linux-specific durability /
   failure-injection 的等价验收证据
+
+### US3 最终验证入口状态
+
+当前 `US3` 的验证入口文档与状态收口如下：
+
+- `T023`：已完成，Linux `./test.sh` 主入口的 platform-neutral /
+  Linux-specific 分组、`--keep-data` 与 rerun 指南已明确
+- `T024`：已完成，Windows `windows` / `windows-release` /
+  `windows-release-tests` preset fallback 已形成稳定文档入口
+- `T025`：已完成，Windows PowerShell fallback `.\test.ps1 -All` 已记录
+- `T026`：已完成，`platform-neutral`、`durability-boundary`、
+  `linux-specific-failure-injection`、`linux-primary-diagnosis` 标签边界已明确
+- `T027`：已完成，`platform-support.md` 已记录 Linux / Windows 当前支持范围
+- `T028`：已完成，`quickstart.md` 与 `tests/README.md` 已补齐维护者入口说明
+- `T029`：已完成，当前 Linux / Windows 入口结果、现存红灯与后续 follow-up
+  已统一记录
+
+当前文档化结果：
+
+- Linux：
+  - `cmake --preset debug-ninja-low-parallel`：PASS
+  - `cmake --build --preset debug-ninja-low-parallel`：PASS
+  - `CTEST_PARALLEL_LEVEL=1 ./test.sh --group persistence`：PASS
+  - `ctest --preset debug-tests --output-on-failure`：当前 FAIL
+  - `debug-tests` 的当前失败继续解释为 cluster/runtime-heavy 现存红灯，
+    不在 `T029` 修复
+- Windows：
+  - `cmake --preset windows`：PASS
+  - `cmake --build --preset windows-release`：PASS
+  - `ctest --preset windows-release-tests --output-on-failure`：PASS
+  - `.\test.ps1 -All`：作为 Windows PowerShell fallback 已文档化
+  - Windows fallback 当前只代表保守 platform-neutral baseline
+  - 默认覆盖：
+    `CommandTest`、`KvStateMachineTest`、`TimerSchedulerTest`、
+    `ThreadPoolTest`
+
+固定解释边界：
+
+- Windows fallback 不是 Raft 全功能验收结果
+- Windows fallback 不等价于 Linux-specific durability /
+  failure-injection 验收
+- Linux-specific durability / failure-injection / crash-style 语义仍以 Linux
+  主验收解释为准
+- 当前 `US3` 可以按“验证入口与状态文档已收口、运行时扩大验证仍留作
+  follow-up”来理解
 
 ## CTest Label Matrix
 
@@ -279,6 +324,10 @@ Current US2 status:
   `KvStateMachineTest` and `RaftSnapshotRecoveryTest`
 - T019/T020/T021 concluded as no-op because T016/T017/T018 did not produce
   tests-first red evidence requiring production fixes
+- US3 validation-entry documentation from T023-T029, including Linux primary
+  path, Windows preset fallback, PowerShell fallback, label boundaries,
+  platform-support matrix, quickstart / tests README guidance, and final
+  interpretation rules for current PASS/FAIL status
 - Current US1 restart recovery acceptance has no remaining tests-first red
   cases in the managed CTest path
 - Current US2 consistency acceptance has no remaining tests-first red cases in
