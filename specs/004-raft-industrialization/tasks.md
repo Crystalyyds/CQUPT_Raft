@@ -502,6 +502,144 @@
 
 ---
 
+## Phase 7: Windows Full Managed CTest Validation & Cross-Platform Closure Follow-Up
+
+**Purpose**: 从当前 Windows `18/18` conservative baseline 进入受管 full managed CTest 验证与分类修复阶段；显式区分入口缺失、runtime-heavy 红灯、Raft 逻辑红灯、storage/persistence 红灯，以及 Windows durability 语义适配与 Linux-specific deferred 边界。
+
+- [ ] T033 [P] Add Windows full managed CTest presets and wrapper mode without replacing the conservative fallback
+  Goal: 在保留 `windows-release-tests` / `.\test.ps1 -All` 保守 baseline 的前提下，新增 Windows full managed CTest 入口，用来运行当前全部受管 GTest / CTest 回归，而不是只跑 `platform-neutral-fallback` 子集。
+  Input: `CMakePresets.json`, `test.ps1`, `tests/CMakeLists.txt`, `specs/004-raft-industrialization/contracts/validation-entrypoints.md`, `specs/004-raft-industrialization/platform-support.md`, `specs/004-raft-industrialization/quickstart.md`.
+  Scope: 只允许修改 Windows preset / wrapper / 文档入口定义；推荐新增 `windows-release-managed-tests`，如确有必要可同步新增 `windows-debug-managed-tests`；必须保留现有 `windows-release-tests` conservative baseline 不变。
+  Acceptance: 维护者可以在 Windows 上明确区分“保守 baseline 入口”和“full managed CTest 入口”；新入口覆盖 `tests/README.md` 中全部受管目标，而不是仅 `CommandTest`、`KvStateMachineTest`、`TimerSchedulerTest`、`ThreadPoolTest`。
+  Production Code: No.
+  Test Only: No.
+  Cross-Platform: Yes.
+  Linux-Specific: No.
+  Windows/macOS Fallback: Yes, 保留既有 fallback，并新增 full managed validation 入口。
+  Basis: `plan.md` W6/W8；`platform-support.md` Windows 未验证范围；`validation-matrix.md` R6/R7。
+  Tests To Run: `cmake --preset windows`; `cmake --build --preset windows-release`; `ctest --preset windows-release-tests`; `ctest --preset windows-release-managed-tests`.
+
+- [ ] T034 Run the first Windows full managed CTest sweep and capture the uncovered target matrix
+  Goal: 用真实 Windows full managed CTest 执行结果建立第一版覆盖现状，明确 conservative baseline `18/18` 之外其余受管目标的真实状态。
+  Input: T033 输出，`tests/README.md`, `tests/CMakeLists.txt`, `specs/004-raft-industrialization/validation-matrix.md`, `specs/004-raft-industrialization/platform-support.md`.
+  Scope: 只执行 Windows configure/build/full managed CTest，并记录结果；本任务不改生产代码、不改测试语义。
+  Acceptance: 结果必须单独列出当前 Windows conservative baseline 未覆盖的受管目标，并至少覆盖以下目标的 PASS/FAIL/BLOCKED 现状：`test_kv_service`, `test_raft_election`, `test_raft_log_replication`, `test_raft_commit_apply`, `test_raft_split_brain`, `test_t017_leader_switch_ordering`, `persistence_test`, `snapshot_test`, `raft_integration_test`, `test_raft_snapshot_catchup`, `test_raft_snapshot_restart`, `test_raft_snapshot_diagnosis`, `test_raft_segment_storage`, `test_snapshot_storage_reliability`, `test_raft_replicator_behavior`。
+  Production Code: No.
+  Test Only: No.
+  Cross-Platform: Yes.
+  Linux-Specific: No.
+  Windows/macOS Fallback: Yes, 但不得把 conservative baseline 结果改写成 full pass。
+  Basis: `tests/README.md` 受管目标清单；`platform-support.md` Windows 未验证范围；当前 Linux `104/104` 与 Windows `18/18` 的证据差距。
+  Tests To Run: `cmake --preset windows`; `cmake --build --preset windows-release`; `ctest --preset windows-release-managed-tests`.
+
+- [ ] T035 [P] Classify the first Windows full-sweep failures into an actionable matrix
+  Goal: 把 T034 暴露的 Windows full managed CTest 红灯按问题类型收口成可执行的失败矩阵，而不是笼统写成“Windows 还需 follow-up”。
+  Input: T034 执行结果，`specs/004-raft-industrialization/validation-matrix.md`, `specs/004-raft-industrialization/platform-support.md`, `specs/004-raft-industrialization/quickstart.md`, `specs/004-raft-industrialization/contracts/validation-entrypoints.md`.
+  Scope: 只允许修改文档与失败矩阵归类，不在本任务内修代码。
+  Acceptance: 每个 FAIL/BLOCKED 目标都必须归入以下之一：`Windows full managed CTest entry/harness missing`, `Windows cluster/runtime-heavy uncovered`, `Windows election/replication/commit-apply red`, `Windows snapshot/restart/catch-up red`, `Windows persistence/segment/storage red`, `Windows durability semantics adapt-or-defer`；并明确后续对应任务编号。
+  Production Code: No.
+  Test Only: No.
+  Cross-Platform: Yes.
+  Linux-Specific: No.
+  Windows/macOS Fallback: Yes, 必须继续保留“Windows 不等价 Linux-specific durability”边界。
+  Basis: `spec.md` FR-008/FR-011；`plan.md` W7/W8；当前 Phase 7 目标。
+  Tests To Run: None; 复用 T034 输出。
+
+- [ ] T036 Fix Windows full managed CTest preset / runner / discover blockers before touching production logic
+  Goal: 先排除 Windows full managed CTest 入口层问题，避免把 preset、working directory、multi-config、discover、wrapper、filter 或结果采集错误误判为 Raft 逻辑缺陷。
+  Input: T033-T035 输出，`CMakePresets.json`, `test.ps1`, `tests/CMakeLists.txt`, top-level `CMakeLists.txt`（仅当 preset/plumbing 无法单独解决时）, 相关 validation docs。
+  Scope: 只允许修改 preset、wrapper、CTest discover / 标签组织、必要的构建脚本路径与文档；禁止修改 `modules/raft/**` 生产代码；禁止借由放宽断言或删除目标来“消灭”红灯。
+  Acceptance: Windows full managed CTest 运行结束后，剩余失败必须是测试或生产逻辑问题，而不是入口/runner/configuration 问题；现有 `windows-release-tests` conservative baseline 仍保持可用。
+  Production Code: No.
+  Test Only: No.
+  Cross-Platform: Yes.
+  Linux-Specific: No.
+  Windows/macOS Fallback: Yes, 这是 full managed 入口收口任务。
+  Basis: `validation-entrypoints.md` Windows preset contract；`platform-support.md` 当前 Windows 入口只到 conservative baseline。
+  Tests To Run: `cmake --preset windows`; `cmake --build --preset windows-release`; `ctest --preset windows-release-tests`; `ctest --preset windows-release-managed-tests`.
+
+- [ ] T037 Stabilize Windows-only test harness assumptions for cluster/runtime-heavy coverage before changing Raft logic
+  Goal: 如果 T035 证明某些红灯来自 Windows 下的 test harness、timeout、路径、临时目录、进程收尾或 file-lock 假设，而不是 Raft 业务逻辑，则先在测试层收口这些运行时假设。
+  Input: T035 失败矩阵，受影响测试源文件，`tests/CMakeLists.txt`, `test.ps1`, `specs/004-raft-industrialization/platform-support.md`.
+  Scope: 只允许修改 `tests/*.cpp`、`tests/CMakeLists.txt`、`test.ps1` 和相关文档中的 Windows test harness / timeout / path / temp-dir / cleanup 逻辑；禁止修改 `modules/raft/**` 生产代码；禁止改变协议预期、持久化格式或通过条件。
+  Acceptance: 属于 Windows runtime/timing/path/file-lock 假设的失败，要么被测试层稳定化并进入 full managed sweep，要么被明确升级给 T038-T040 作为真实生产问题；不得继续与 entrypoint 缺失或 Linux-specific durability 混在一起。
+  Production Code: No.
+  Test Only: Yes, 仅限 Windows test harness / runtime assumption 收口。
+  Cross-Platform: Yes.
+  Linux-Specific: No.
+  Windows/macOS Fallback: Yes, 这是 Windows runtime-heavy 覆盖扩大前置任务。
+  Basis: `platform-support.md` Windows runtime/timing/path/file-lock 缺口；`tests/README.md` 受管目标边界。
+  Tests To Run: `ctest --test-dir build/windows -C Release --output-on-failure -R '^(RaftKvServiceTest|RaftElectionTest|RaftSplitBrainTest|RaftLeaderSwitchOrderingTest|RaftIntegrationTest)\\.'`; `ctest --preset windows-release-managed-tests`.
+
+- [ ] T038 Fix Windows election / replication / commit-apply red lights exposed by the full managed sweep
+  Goal: 收口 Windows full managed CTest 中属于平台无关 Raft 逻辑的 election / replication / commit-apply 红灯，不把它们继续留在“只有 Linux 绿”的状态。
+  Input: T035 失败矩阵，T037 输出，`tests/test_raft_election.cpp`, `tests/test_raft_log_replication.cpp`, `tests/test_raft_commit_apply.cpp`, `tests/test_t017_leader_switch_ordering.cpp`, `tests/test_raft_replicator_behavior.cpp`，相关模块源码。
+  Scope: 如需修改生产代码，只允许最小改动 `modules/raft/node/*.cpp`, `modules/raft/replication/*.cpp`, `modules/raft/runtime/*.cpp`, `modules/raft/service/*.cpp`；允许同步补充相关测试与文档；禁止修改协议语义、公共 API、类名、函数名或持久化格式。
+  Acceptance: 与 election / replication / commit-apply 相关的 Windows 红灯在 full managed sweep 下转绿，或剩余项被证明属于其他类别并重新归类；修复必须附带对应 focused rerun 和 full managed rerun 证据。
+  Production Code: Yes, 仅允许 `modules/raft/node`, `modules/raft/replication`, `modules/raft/runtime`, `modules/raft/service` 的最小 `.cpp` 改动。
+  Test Only: No.
+  Cross-Platform: Yes.
+  Linux-Specific: No.
+  Windows/macOS Fallback: Yes, 目标是补齐平台无关 Raft 逻辑验证，不宣称 Linux-specific 等价。
+  Basis: `spec.md` FR-004/FR-011；`plan.md` W4/W8；`platform-support.md` Windows cluster-style 未验证范围。
+  Tests To Run: `ctest --test-dir build/windows -C Release --output-on-failure -R '^(RaftElectionTest|RaftLogReplicationTest|RaftCommitApplyTest|RaftLeaderSwitchOrderingTest|RaftReplicatorBehaviorTest)\\.'`; `ctest --preset windows-release-managed-tests`.
+
+- [ ] T039 Fix Windows snapshot / restart / catch-up red lights exposed by the full managed sweep
+  Goal: 收口 Windows 下 snapshot、restart、catch-up、diagnosis 链路里的真实红灯，明确哪些是平台无关恢复/追赶问题，哪些才属于 durability follow-up。
+  Input: T035 失败矩阵，T037 输出，`tests/snapshot_test.cpp`, `tests/test_raft_snapshot_catchup.cpp`, `tests/test_raft_snapshot_restart.cpp`, `tests/test_raft_snapshot_diagnosis.cpp`, `tests/raft_integration_test.cpp`，相关模块源码。
+  Scope: 如需修改生产代码，只允许最小改动 `modules/raft/node/*.cpp`, `modules/raft/replication/*.cpp`, `modules/raft/storage/*.cpp`, `modules/raft/state_machine/*.cpp`；允许同步修改相关测试与文档；禁止改协议语义、公共 API 或持久化格式。
+  Acceptance: 与 snapshot/restart/catch-up 相关的 Windows full managed CTest 红灯被定位并尽可能转绿；若某项最终属于 Linux-specific durability 语义缺口，必须明确转交 T041，而不是笼统标记为“Windows 不支持”。
+  Production Code: Yes, 仅允许 `modules/raft/node`, `modules/raft/replication`, `modules/raft/storage`, `modules/raft/state_machine` 的最小 `.cpp` 改动。
+  Test Only: No.
+  Cross-Platform: Yes.
+  Linux-Specific: Partially.
+  Windows/macOS Fallback: Yes, 但不得把 Linux-specific crash-style 语义写成已等价通过。
+  Basis: `spec.md` FR-003/FR-004/FR-010/FR-011；`plan.md` W3/W4/W5/W8。
+  Tests To Run: `ctest --test-dir build/windows -C Release --output-on-failure -R '^(SnapshotTest|RaftSnapshotCatchupTest|RaftSnapshotRestartTest|RaftSnapshotDiagnosisTest|RaftIntegrationTest)\\.'`; `ctest --preset windows-release-managed-tests`.
+
+- [ ] T040 Fix Windows persistence / segment / storage red lights without changing persisted format or API
+  Goal: 收口 Windows 下 `persistence_test`、segment log、snapshot storage 等 storage 相关红灯中的平台无关恢复缺陷、路径问题或 file-lock 问题，但不把 Linux-specific exact durability 注入直接等价化。
+  Input: T035 失败矩阵，`tests/persistence_test.cpp`, `tests/test_raft_segment_storage.cpp`, `tests/test_snapshot_storage_reliability.cpp`, `tests/test_raft_snapshot_restart.cpp`，相关 storage/node/state_machine 源码。
+  Scope: 如需修改生产代码，只允许最小改动 `modules/raft/storage/*.cpp`, `modules/raft/node/*.cpp`, `modules/raft/state_machine/*.cpp`；允许同步补充测试与文档；禁止更改持久化格式、公共 API 或对 required durability operations 进行静默降级。
+  Acceptance: Windows full managed CTest 中与 persistence/segment/storage 相关的 platform-neutral 恢复红灯被修复；剩余无法转绿的 exact durability / directory sync / crash-style 语义必须明确沉淀到 T041。
+  Production Code: Yes, 仅允许 `modules/raft/storage`, `modules/raft/node`, `modules/raft/state_machine` 的最小 `.cpp` 改动。
+  Test Only: No.
+  Cross-Platform: Yes.
+  Linux-Specific: Partially.
+  Windows/macOS Fallback: Yes, 但不得把 Linux-specific failure-injection 结果改写成 Windows 已等价验证。
+  Basis: `spec.md` FR-003/FR-006/FR-010/FR-011；`plan.md` W2/W3/W8；根 `AGENTS.md` durability contract。
+  Tests To Run: `ctest --test-dir build/windows -C Release --output-on-failure -R '^(PersistenceTest|RaftSegmentStorageTest|SnapshotStorageReliabilityTest|RaftSnapshotRecoveryTest)\\.'`; `ctest --preset windows-release-managed-tests`.
+
+- [ ] T041 Handle Windows durability semantics as explicit adapt-or-defer follow-up
+  Goal: 单独处理 Windows durability 语义，不把 Linux `fsync` / directory sync / crash-style failure injection 直接硬写成 Windows 等价；能实现的 required durability contract 做最小适配，不能等价的部分明确 deferred 边界和错误语义。
+  Input: T035/T040 输出，`specs/004-raft-industrialization/platform-support.md`, `specs/004-raft-industrialization/validation-matrix.md`, `specs/004-raft-industrialization/contracts/validation-entrypoints.md`, `specs/004-raft-industrialization/quickstart.md`, `modules/raft/storage/**`, `modules/raft/runtime/**`.
+  Scope: 允许最小修改 `modules/raft/storage/*.cpp`、`modules/raft/runtime/*.cpp` 或必要的窄范围平台 helper，以满足 Windows required durability contract 或明确错误返回；允许同步更新平台/验证文档；禁止引入 silent no-op durability success，禁止宣称 Windows 已等价通过 Linux-specific failure-injection。
+  Acceptance: Windows durability 相关结论必须二选一并留证据：1) 对 required durability operations 给出可验证的 Windows 适配实现和 focused/full managed 证据；2) 对当前无法等价的 exact Linux-specific 语义给出明确 deferred 说明、非等价原因和后续入口，不与 platform-neutral full managed pass 混写。
+  Production Code: Yes, 仅允许 `modules/raft/storage`、`modules/raft/runtime` 及必要窄范围平台 helper 的最小改动。
+  Test Only: No.
+  Cross-Platform: Yes.
+  Linux-Specific: Yes, 需要显式区分 Linux-specific exact durability semantics。
+  Windows/macOS Fallback: Yes, 这是 Windows durability follow-up 的核心边界任务。
+  Basis: 根 `AGENTS.md` durability hard rule；`spec.md` FR-006/FR-009/FR-011；`platform-support.md` Windows durability 未验证范围。
+  Tests To Run: `ctest --test-dir build/windows -C Release --output-on-failure -R '^(PersistenceTest|RaftSegmentStorageTest|SnapshotStorageReliabilityTest|RaftSnapshotRecoveryTest)\\.'`; `ctest --preset windows-release-managed-tests`.
+
+- [ ] T042 Backfill cross-platform docs and run the final Windows full managed closure sweep
+  Goal: 用最终 Windows full managed CTest 结果回填平台文档、验证矩阵、入口说明和测试角色说明，形成“Windows full managed 已验证到哪里、哪些仍是 Linux-specific / deferred”的最终收口结论。
+  Input: T033-T041 全部输出，`specs/004-raft-industrialization/validation-matrix.md`, `specs/004-raft-industrialization/platform-support.md`, `specs/004-raft-industrialization/quickstart.md`, `specs/004-raft-industrialization/contracts/validation-entrypoints.md`, `tests/README.md`, `CMakePresets.json`, `test.ps1`.
+  Scope: 允许修改文档、preset 与 wrapper 说明，并执行最终 Windows full managed rerun；若 rerun 暴露新生产问题，应新开后续任务，不在本任务内临时扩大修复范围。
+  Acceptance: 文档明确记录 Windows conservative baseline 与 Windows full managed CTest 的最终差异；明确哪些 managed tests 已在 Windows full managed 下通过，哪些仍只属于 Linux-specific durability evidence 或 deferred follow-up；不得出现“Windows 已等价 Linux 104/104”或“Windows durability 已等价 Linux”表述。
+  Production Code: No.
+  Test Only: No.
+  Cross-Platform: Yes.
+  Linux-Specific: Partially.
+  Windows/macOS Fallback: Yes, 需同时保留 conservative baseline 与 full managed 入口说明。
+  Basis: `spec.md` SC-003/SC-004/SC-005；`plan.md` W8；当前 Phase 7 总目标。
+  Tests To Run: `cmake --preset windows`; `cmake --build --preset windows-release`; `ctest --preset windows-release-tests`; `ctest --preset windows-release-managed-tests`.
+
+**Checkpoint**: Phase 7 完成后，Windows 将不再只停留在 `18/18` conservative baseline；维护者应能看清 full managed CTest 的真实覆盖、失败矩阵、已修复类别、durability 非等价边界和剩余 deferred 项。
+
+---
+
 ## Dependencies & Execution Order
 
 ### Phase Dependencies
@@ -512,6 +650,7 @@
 - **Phase 4: US2**: 依赖 US1 的 trusted-state 基线，避免把恢复问题与复制问题混在一起。
 - **Phase 5: US3**: 依赖 US1/US2 的实际产出，才能形成真实入口和文档。
 - **Phase 6: Polish**: 所有目标故事完成后收口。
+- **Phase 7: Windows Full Managed Closure**: 依赖 Phase 6，基于当前 Linux 主验证已收口、Windows conservative fallback 已成文的前提，进入 Windows full managed CTest sweep、分类修复与 durability follow-up。
 
 ### User Story Dependencies
 
@@ -524,6 +663,7 @@
 - 先写或补失败测试，再定是否需要生产代码修复。
 - `storage` failure injection 与 trusted-state 测试在 `node`/`replication` 修复前先落地。
 - 文档和平台说明在对应验证证据形成后再更新。
+- Phase 7 先补 Windows full managed 入口（T033），再做第一次 full sweep 与失败矩阵（T034-T035），然后先清 entry/harness 阻塞（T036-T037），最后按生产问题类别进入 T038-T041，T042 负责最终回填与复验。
 
 ### Priority Order
 
@@ -531,7 +671,7 @@
 - **P1**: T016-T022
 - **P2**: T023-T026
 - **P3**: T027-T030
-- **P4**: T031-T032
+- **P4**: T031-T042
 
 ### Parallel Opportunities
 
@@ -541,6 +681,9 @@
 - T012 和 T013 可并行。
 - T016、T017、T018 可并行。
 - T023、T024、T025、T027 可并行，因为分别落在脚本、presets/CMake、PowerShell、平台文档。
+- T033 完成后，T034 与 T036 不能跳过；T035 依赖 T034 的真实 sweep 结果。
+- T037、T038、T039、T040 在 T035 完成且问题边界切清后可按 test-only / production-code 分类并行，但必须保持写入范围不重叠。
+- T041 依赖 T035 与 storage 相关结果；T042 必须最后执行。
 
 ---
 
@@ -586,9 +729,11 @@ Task: "Add state-machine replay consistency regressions in tests/test_state_mach
 3. US2：补强 cluster consistency 与 state-machine replay 证据。
 4. US3：收敛一键入口、平台 fallback 与失败定位文档。
 5. Polish：完成 P4 follow-up 标注与最终收口。
+6. Phase 7：把 Windows 从 conservative baseline 推进到 full managed CTest sweep、分类修复与 durability 边界收口。
 
 ## Notes
 
 - 所有任务都只针对“仍需完善”的工业化缺口，没有把稳定完成的 Raft 主路径重新拆成实现任务。
 - 任何生产代码任务都限定在最小 `.cpp` 修改范围，并以新增失败测试为前置证据。
 - Linux-specific 任务都必须在文档中带 Windows/macOS fallback 或 deferred note。
+- Windows full managed CTest 任务必须始终把 conservative baseline、platform-neutral full sweep、durability-boundary 和 Linux-specific exact failure-injection 分开解释，禁止跨平台虚报等价。
