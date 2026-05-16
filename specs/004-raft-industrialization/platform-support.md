@@ -107,6 +107,22 @@ linux-specific-failure-injection 混为一谈。
 | durability-boundary | 已记录 Linux 主环境解释与相关恢复边界 | 不声明等价运行时验证 | 当前不在本 feature 验证范围内 |
 | linux-specific-failure-injection | 当前只记录 Linux 证据 | 明确不等价、不继承 | 当前不在本 feature 验证范围内 |
 
+## Linux-specific 任务交叉检查
+
+下表用于把 `T006/T007/T011/T023-T030` 中涉及 Linux-specific failure
+injection、crash-style、Bash-first 与 durability-boundary 的内容，同当前平台
+支持边界逐项对齐。
+
+| 任务 / 内容 | Linux 当前解释 | Windows 当前 fallback | 未等价验证 / deferred 说明 | macOS |
+|------------|----------------|-----------------------|----------------------------|-------|
+| T006 / T009：meta / log failure injection | exact `fsync`、directory sync、replace/rename、partial write、trusted-state 边界只记为 Linux-specific runtime evidence | 只允许回退到 `ctest --preset debug-tests` 的 logic fallback，或 Windows preset / `test.ps1` 的保守 platform-neutral baseline | 不声明 Windows 已完成等价 durability 运行时验证；后续继续保留 Windows durability 语义适配与 runtime validation follow-up | 当前不在本 feature 验证范围内 |
+| T007 / T010：snapshot publish / prune failure injection | temp-dir publish、replace/rename、prune/remove、snapshot durability boundary 继续由 Linux 主验收解释 | 只允许回退到 Linux `debug-tests` logic fallback，或 Windows preset / `test.ps1` 的保守 baseline；不把 publish/prune 注入语义转写为 Windows 已验证 | Windows snapshot publish/prune 等价语义仍属 deferred / follow-up，不记录为已验证 | 当前不在本 feature 验证范围内 |
+| T011：injected-failure diagnostics | retained-artifact、diagnosis、crash-style 失败定位继续按 Linux-primary 解释 | Windows 只保留 platform-neutral fallback，不提供与 `--keep-data` 或 Linux-primary diagnosis 等价的排障能力 | Windows retained-artifact / diagnosis / crash-style 运行时观察继续保留为 follow-up | 当前不在本 feature 验证范围内 |
+| T023：Linux Bash 主入口 | `./test.sh`、低并发分组和 `--keep-data` 是 Linux 主验收路径 | Windows fallback 入口是 preset + `.\test.ps1 -All`；Linux 的 `ctest --preset debug-tests` 只是 CTest fallback | 不把 Windows preset / PowerShell fallback 写成 Bash-first 等价入口 | 当前不在本 feature 验证范围内 |
+| T024 / T025：Windows preset / PowerShell fallback | Linux 主入口语义不变 | `cmake --preset windows`、`cmake --build --preset windows-release`、`ctest --preset windows-release-tests`、`.\test.ps1 -All` 只代表保守 platform-neutral baseline | 不声明 Windows Raft 全功能通过；cluster-style、durability、failure-injection 继续 deferred | 当前不在本 feature 验证范围内 |
+| T026：CTest label / Linux-specific 边界 | `platform-neutral`、`durability-boundary`、`linux-specific-failure-injection`、`linux-primary-diagnosis` 当前都按 Linux 主环境边界解释 | Windows fallback 只消费保守 baseline 子集，不因为 label 存在就继承 Linux-specific 语义 | mixed executable 不会被写成 Windows 已等价验证；Linux-specific 语义仍保留为 deferred runtime follow-up | 当前不在本 feature 验证范围内 |
+| T028 / T030：manual-only / diagnostic-only / temporary 文件 | `persistence_more_test.cpp`、`test_temp.cpp` 不属于 Linux 主回归入口，只作为手工诊断或临时文件说明 | 不进入 Windows platform-neutral fallback，也不作为跨平台正式验收资产 | 若后续清理或迁移，仅作为 follow-up 记录，不在当前范围执行 | 当前不在本 feature 验证范围内 |
+
 ## 已验证范围
 
 ### Linux 已验证范围

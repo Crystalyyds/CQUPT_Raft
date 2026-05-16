@@ -234,6 +234,47 @@ For these areas, Windows/macOS follow-up must either:
   semantics, or
 - remain explicitly deferred until runtime validation exists.
 
+### T031 Cross-Check Snapshot
+
+The current document set now cross-checks the following Linux-specific /
+crash-style / Bash-first areas against
+`specs/004-raft-industrialization/platform-support.md`:
+
+- T006 / T009:
+  meta / log exact durability failure injection, including `fsync`,
+  directory sync, replace/rename, partial write, and trusted-state boundary
+  expectations, remains Linux-specific runtime evidence only.
+- T007 / T010:
+  snapshot publish / prune failure injection, including temp-dir publish,
+  replace/rename, prune/remove, and snapshot durability-boundary behavior,
+  remains Linux-primary evidence only.
+- T011:
+  injected-failure diagnostics, retained-artifact diagnosis, and crash-style
+  failure localization remain Linux-primary and are not rewritten as Windows
+  runtime proof.
+- T023:
+  `./test.sh` plus low-parallel grouped reruns and `--keep-data` remain the
+  Linux Bash primary path; Windows preset / PowerShell flows are documented as
+  fallback only.
+- T024 / T025:
+  Windows preset fallback and `.\test.ps1 -All` are explicitly limited to a
+  conservative platform-neutral baseline subset, not full Raft acceptance.
+- T026:
+  `platform-neutral`, `durability-boundary`,
+  `linux-specific-failure-injection`, and `linux-primary-diagnosis` label
+  boundaries remain consistent with the Linux-primary interpretation rules.
+- T028 / T030:
+  `tests/persistence_more_test.cpp` and `tests/test_temp.cpp` are documented as
+  manual-only / diagnostic-only / temporary assets and are not interpreted as
+  formal cross-platform acceptance artifacts.
+
+For all rows above:
+
+- Windows fallback remains non-equivalent to Linux-specific durability /
+  failure-injection / crash-style acceptance.
+- macOS remains out of validation scope for this feature and is only mentioned
+  as deferred / not validated.
+
 ## US1 Accepted Restart Recovery Evidence
 
 | Evidence area | Covered scenarios | Entrypoint | Latest status | Platform scope |
