@@ -147,6 +147,23 @@ macOS 当前不在本 feature 验证范围内。
 
 这只是保守 platform-neutral baseline，不代表 Windows Raft 全功能测试通过。
 
+## 3.1 Windows full managed CTest 入口
+
+当前另外提供单独的 Windows full managed CTest 入口：
+
+- `ctest --preset windows-release-managed-tests`
+- `ctest --preset windows-debug-managed-tests`
+- `.\test.ps1 -Managed`
+
+解释规则：
+
+- 这组入口和上面的 conservative baseline 分开存在。
+- 它们运行完整受管 GTest / CTest 目标集合。
+- 它们只是后续 Windows full managed sweep 的入口，不代表已经通过。
+- 它们不等价于 Linux 当前 `104/104` managed 结果。
+- 它们也不把 Linux-specific durability / failure-injection 改写成 Windows
+  已等价验证。
+
 ## 4. 哪些受管测试不进入 Windows fallback
 
 以下受管回归当前都不属于 Windows platform-neutral fallback：

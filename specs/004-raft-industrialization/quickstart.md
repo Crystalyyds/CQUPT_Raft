@@ -18,7 +18,9 @@ Linux-specific 边界，都以它为准。
 3. 若某个高风险区域失败，按矩阵中的 focused rerun 命令进入对应分组。
 4. 若当前环境是 Windows，优先使用 `.\test.ps1 -All` 完成 PowerShell
    platform-neutral fallback。
-5. 若不在 Linux 上且不适用 Windows preset，或只需要跑平台无关基线，使用
+5. 若需要单独观察 Windows 的完整受管 CTest sweep，显式运行
+   `ctest --preset windows-release-managed-tests` 或 `.\test.ps1 -Managed`。
+6. 若不在 Linux 上且不适用 Windows preset，或只需要跑平台无关基线，使用
    `ctest --preset debug-tests` 作为 fallback。
 
 ## 3. Linux 主入口怎么跑
@@ -183,6 +185,9 @@ ctest --preset debug-tests --output-on-failure
   当前只运行保守 test-name 子集：
   `CommandTest`、`KvStateMachineTest`、`TimerSchedulerTest`、`ThreadPoolTest`。
 - 如需额外验证 Debug 路径，使用 `windows-debug` 与 `windows-debug-tests`。
+- `windows-release-managed-tests` 是单独的 Windows Release full managed CTest
+  sweep 入口，不会替换掉 `windows-release-tests`。
+- 如需 Debug full managed sweep，可使用 `windows-debug-managed-tests`。
 - `platform-neutral-fallback` 比完整的 `platform-neutral` 语义桶更保守。
 - 若某个 executable 没有 `platform-neutral-fallback`，即使它仍带有
   `platform-neutral` 语义，也不代表它已经被纳入 Windows 默认 fallback 验证。
@@ -199,6 +204,24 @@ ctest --preset windows-release-tests
 - 不声明 Windows Raft 全功能通过。
 - 不声明 Windows 已等价验证 Linux-specific durability /
   failure-injection。
+
+如果需要显式触发 Windows full managed CTest sweep，使用：
+
+```bash
+ctest --preset windows-release-managed-tests
+```
+
+或：
+
+```bash
+.\test.ps1 -Managed
+```
+
+解释规则：
+
+- 这条入口运行完整受管 CTest 目标集合。
+- 它只是新增的验证入口，不代表已经通过。
+- 它不等价于 Linux 当前 `104/104` managed 结果。
 
 ## 9. 哪些测试属于 Windows fallback，哪些不属于
 

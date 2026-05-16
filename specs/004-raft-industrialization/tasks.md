@@ -459,7 +459,7 @@
 
 **Purpose**: 收口跨故事文档、遗留脚本/测试角色说明与 P4 follow-up，不做大重构。
 
-- [ ] T030 [P] Document the role of `tests/persistence_more_test.cpp` and `tests/test_temp.cpp` in `tests/README.md` and `specs/004-raft-industrialization/validation-matrix.md`
+- [x] T030 [P] Document the role of `tests/persistence_more_test.cpp` and `tests/test_temp.cpp` in `tests/README.md` and `specs/004-raft-industrialization/validation-matrix.md`
   Goal: 区分受管回归测试、手工诊断程序、临时测试文件，避免后续把非回归程序误当正式验收资产。
   Input: `tests/persistence_more_test.cpp`, `tests/test_temp.cpp`, `tests/README.md`, `validation-matrix.md`.
   Scope: 文档为主；若决定删除临时文件，需另开 feature，不在本任务直接做大清理。
@@ -472,7 +472,7 @@
   Basis: 当前目录结构分析；`plan.md` W7。
   Tests To Run: None; 文档任务。
 
-- [ ] T031 [P] Cross-check Linux-specific tasks against `specs/004-raft-industrialization/platform-support.md`
+- [x] T031 [P] Cross-check Linux-specific tasks against `specs/004-raft-industrialization/platform-support.md`
   Goal: 确保所有 Linux-specific failure injection、crash-style、bash-only 任务都有 Windows/macOS fallback 或 deferred note。
   Input: `tasks.md`, `validation-matrix.md`, `platform-support.md`, `contracts/`.
   Scope: 文档交叉检查。
@@ -506,7 +506,7 @@
 
 **Purpose**: 从当前 Windows `18/18` conservative baseline 进入受管 full managed CTest 验证与分类修复阶段；显式区分入口缺失、runtime-heavy 红灯、Raft 逻辑红灯、storage/persistence 红灯，以及 Windows durability 语义适配与 Linux-specific deferred 边界。
 
-- [ ] T033 [P] Add Windows full managed CTest presets and wrapper mode without replacing the conservative fallback
+- [x] T033 [P] Add Windows full managed CTest presets and wrapper mode without replacing the conservative fallback
   Goal: 在保留 `windows-release-tests` / `.\test.ps1 -All` 保守 baseline 的前提下，新增 Windows full managed CTest 入口，用来运行当前全部受管 GTest / CTest 回归，而不是只跑 `platform-neutral-fallback` 子集。
   Input: `CMakePresets.json`, `test.ps1`, `tests/CMakeLists.txt`, `specs/004-raft-industrialization/contracts/validation-entrypoints.md`, `specs/004-raft-industrialization/platform-support.md`, `specs/004-raft-industrialization/quickstart.md`.
   Scope: 只允许修改 Windows preset / wrapper / 文档入口定义；推荐新增 `windows-release-managed-tests`，如确有必要可同步新增 `windows-debug-managed-tests`；必须保留现有 `windows-release-tests` conservative baseline 不变。

@@ -41,7 +41,7 @@ cross-platform gaps are scheduled for follow-up work.
 | P1 | Catch-up after lag, compaction, restart, and snapshot handoff | Implemented but needs stronger proof | `plan.md` W4, current gap classification `B/C` | `./test.sh --group snapshot-catchup`, `integration`, `replicator` | No | Same tests should remain runnable via CTest |
 | P1 | Leader switch and commit/apply ordering under churn | Implemented but still risky | `plan.md` W4, current gap classification `B/C` | `./test.sh --group replication`, `election`, `replicator` | No | Same tests should remain runnable via CTest |
 | P1 | State-machine apply/replay consistency after snapshot/restart | Implemented but needs stronger proof | `plan.md` W5 | `./test.sh --group snapshot-recovery`, targeted `ctest -R` on state machine and integration tests | No | Same tests should remain runnable via CTest |
-| P2 | Unified validation entrypoints and grouped test guidance | Completed for current documented scope | Current `test.sh`, `test.ps1`, `CMakePresets.json`, `plan.md` W6 | `./test.sh --group all`, `.\test.ps1 -All`, `ctest --preset debug-tests`, `ctest --preset windows-release-tests`, `ctest --preset windows-debug-tests` | Partially | PowerShell fallback is now available; Windows test preset 已收敛到 `platform-neutral-fallback` 保守子集，当前通过保守 test-name 子集落实，Linux-specific runtime evidence 仍需显式边界说明 |
+| P2 | Unified validation entrypoints and grouped test guidance | Completed for current documented scope | Current `test.sh`, `test.ps1`, `CMakePresets.json`, `plan.md` W6 | `./test.sh --group all`, `.\test.ps1 -All`, `.\test.ps1 -Managed`, `ctest --preset debug-tests`, `ctest --preset windows-release-tests`, `ctest --preset windows-debug-tests`, `ctest --preset windows-release-managed-tests` | Partially | PowerShell fallback is now available; Windows conservative baseline 与 Windows full managed 入口已分开记录，Linux-specific runtime evidence 仍需显式边界说明 |
 | P3 | Failure localization and platform-support documentation | Completed for current US3 scope | `plan.md` W7/W8 | Spec docs and grouped rerun commands | Partially | Platform support, quickstart, tests README, and final US3 interpretation rules are now documented; remaining items stay in explicit follow-up |
 | P4 | Windows/macOS deeper runtime validation and CI expansion | Deferred follow-up | `spec.md` platform scope, `plan.md` W8 | Future runtime validation | No | This row is itself the fallback and follow-up definition |
 
@@ -65,9 +65,12 @@ cross-platform gaps are scheduled for follow-up work.
 | `cmake --preset windows` | Windows configure fallback | Windows platform-neutral baseline setup | No | No | Existing Visual Studio 17 2022 configure preset remains unchanged |
 | `cmake --build --preset windows-release` | Windows Release build fallback | Windows platform-neutral baseline build | No | No | Uses `configurePreset: windows`, `configuration: Release` |
 | `ctest --preset windows-release-tests` | Windows Release test fallback | Windows platform-neutral baseline execution | No | No | Uses `configuration: Release`; current subset is `CommandTest|KvStateMachineTest|TimerSchedulerTest|ThreadPoolTest` |
+| `ctest --preset windows-release-managed-tests` | Windows Release full managed sweep | Windows full managed CTest target sweep | No | No | Uses `configuration: Release`; runs the complete managed CTest target set; entry exists but does not imply PASS |
 | `cmake --build --preset windows-debug` | Windows Debug build fallback | Optional Windows platform-neutral debug build | No | No | Uses `configurePreset: windows`, `configuration: Debug` |
 | `ctest --preset windows-debug-tests` | Windows Debug test fallback | Optional Windows platform-neutral debug execution | No | No | Uses `configuration: Debug`; current subset is `CommandTest|KvStateMachineTest|TimerSchedulerTest|ThreadPoolTest` |
+| `ctest --preset windows-debug-managed-tests` | Windows Debug full managed sweep | Optional Windows full managed CTest target sweep | No | No | Uses `configuration: Debug`; runs the complete managed CTest target set; entry exists but does not imply PASS |
 | `.\test.ps1 -All` | Windows PowerShell fallback wrapper | Windows platform-neutral one-command validation | No | No | Default flow wraps `windows` / `windows-release` / `windows-release-tests`; current test subset is conservative and does not run Linux-specific groups |
+| `.\test.ps1 -Managed` | Windows PowerShell full managed wrapper | Windows one-command full managed CTest sweep | No | No | Explicit opt-in mode; wraps `windows` / `windows-release` / `windows-release-managed-tests`; entry existence does not imply PASS |
 | `CTEST_PARALLEL_LEVEL=1 ./test.sh --group all` | Primary regression sweep | Linux primary validation | Partially | Optional via `--keep-data` | Includes grouped Linux execution flow |
 | `./test.sh --group persistence` | Focused restart/durability rerun | Industrialization hotspot | Partially | Optional via `--keep-data` | Main trusted-state regression bucket |
 | `./test.sh --group snapshot-recovery` | Focused snapshot/restart rerun | Industrialization hotspot | Partially | Optional via `--keep-data` | Current flaky blocker area |
@@ -203,12 +206,16 @@ Windows preset 过滤边界说明：
 - `windows-release-tests` / `windows-debug-tests` 当前只运行保守 test-name
   子集：`CommandTest`、`KvStateMachineTest`、`TimerSchedulerTest`、
   `ThreadPoolTest`。
+- `windows-release-managed-tests` / `windows-debug-managed-tests` 不使用上述
+  保守子集过滤，运行完整受管 CTest 目标集合。
 - 由于当前粒度是 executable label 而不是单条 test case label，Windows
   fallback 采用保守子集策略：只有明确打上 `platform-neutral-fallback` 的
   语义才进入默认 preset 的解释范围；当前运行实现通过 test-name 子集落地。
 - 因此 Windows baseline 只证明保守的 platform-neutral fallback 子集可运行，
   不声明“所有带有部分 platform-neutral 逻辑的 executable 都已在 Windows
   纳入验收”。
+- Windows full managed 入口只是后续 sweep / 分类修复的承载入口，不得被写成
+  Windows 已等价达到 Linux 当前 `104/104` 受管结果。
 
 ## `test.sh` Section Map
 
