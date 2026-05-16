@@ -42,16 +42,25 @@
   - Windows 已补齐 preset-based fallback：
     - `cmake --preset windows`
     - `cmake --build --preset windows-release`
-    - `ctest --preset windows-tests`
+    - `ctest --preset windows-release-tests`
+  - 如需额外验证 Debug 路径：
+    - `cmake --build --preset windows-debug`
+    - `ctest --preset windows-debug-tests`
 - **约定**：
   - 该入口只代表 Windows 的 platform-neutral configure/build/CTest fallback，
     不替代 Linux Bash 主入口。
+  - `windows-release-tests` / `windows-debug-tests` 对应保守的 Windows
+    platform-neutral baseline 子集，而不是整个 `platform-neutral` 语义桶。
+  - 当前实现上，它们使用保守的 test-name 子集
+    `^(CommandTest|KvStateMachineTest|TimerSchedulerTest|ThreadPoolTest)\.`，
+    用来承载 `platform-neutral-fallback` 的运行入口语义。
   - 它用于 Visual Studio 17 2022 multi-config 生成器，因此通过
     `configuration: Release` 选择配置，而不是依赖 `CMAKE_BUILD_TYPE`。
   - 任何依赖 Bash、`--keep-data`、Linux-specific failure injection、
     directory sync、crash-style 语义或 retained-artifact 诊断的流程，
     都必须继续标注为 Linux-primary 或 deferred，不能因为
-    `windows-tests` 可运行就视为 Windows 已具备等价运行时证据。
+    `windows-release-tests` / `windows-debug-tests` 可运行就视为 Windows
+    已具备等价运行时证据。
 
 ### 4. Windows PowerShell fallback wrapper
 
@@ -60,10 +69,10 @@
     - `.\test.ps1 -All`
 - **约定**：
   - `test.ps1` 是 Windows 用户的推荐一键 fallback 入口。
-  - 它只封装以下 platform-neutral 流程：
+  - 它默认封装以下 Windows Release platform-neutral 流程：
     - `cmake --preset windows`
     - `cmake --build --preset windows-release`
-    - `ctest --preset windows-tests`
+    - `ctest --preset windows-release-tests`
   - 它不调用 Bash，不执行 Linux-specific 分组，也不声称提供与
     `./test.sh --keep-data` 等价的 retained-artifact 诊断能力。
 
@@ -88,7 +97,7 @@
 4. 如果出现高风险失败，按分组 rerun 命令进入 focused regression。
 5. 如果当前环境是 Windows，优先使用 `.\test.ps1 -All` 作为 PowerShell
    fallback；其底层固定调用 `windows`、`windows-release`、
-   `windows-tests` preset。
+   `windows-release-tests` preset。
 6. 如果当前环境不走 Bash 主入口且不适用 Windows preset，则使用
    `ctest --preset debug-tests --output-on-failure` 作为平台无关 fallback。
 
@@ -115,6 +124,46 @@
 - `replication`：日志复制与 commit/apply 主路径
 - `election`：选举与 split-brain 路径
 - `segment-cluster`：高负载 segment/snapshot 组合路径
+
+## CTest label 约定
+
+`tests/CMakeLists.txt` 现在给受管 GTest / CTest 注册以下标签，用于补充
+`test.sh` 的 group 解释，而不是替代现有 target 名称或 discover 行为：
+
+- `platform-neutral`
+  - 代表跨平台基础回归语义，可进入通用 CTest fallback 解释。
+- `durability-boundary`
+  - 代表 restart / trusted-state / crash-style / durability boundary 语义。
+  - 它要求比普通 platform-neutral baseline 更谨慎的平台范围解释。
+- `linux-specific-failure-injection`
+  - 代表 executable 中包含 exact `fsync`、directory sync、replace/rename、
+    prune/remove、partial write 等 failure-injection 覆盖。
+  - 这类标签当前只声明 Linux-specific runtime evidence。
+- `linux-primary-diagnosis`
+  - 代表 Linux-primary 的 failure localization、retained-artifact 或 stress
+    bucket。
+  - 这些测试即使可经由 CTest 运行，也不能被简单解释为纯
+    platform-neutral baseline。
+
+解释规则：
+
+- `ctest --preset debug-tests --output-on-failure` 仍是通用跨平台 fallback。
+- `ctest --preset windows-release-tests` 与 `ctest --preset windows-debug-tests`
+  只代表 Windows platform-neutral fallback。
+- Windows test preset 当前运行的是保守 test-name 子集：
+  `CommandTest`、`KvStateMachineTest`、`TimerSchedulerTest`、`ThreadPoolTest`。
+- 当命中的测试带有 `linux-specific-failure-injection` 或
+  `linux-primary-diagnosis` 标签时，Windows / 非 Bash CTest 入口只提供
+  logic fallback，不构成 Linux-specific 验收等价物。
+- 若同一 executable 同时带有 `platform-neutral` 与
+  `linux-specific-failure-injection` / `durability-boundary`，应解释为
+  mixed coverage，而不是纯跨平台 runtime 证明。
+- 由于当前过滤粒度是 executable label，而不是单条 test case label，
+  `platform-neutral-fallback` 被故意收窄为保守子集；即使某些更大范围的
+  `platform-neutral` executable 仍包含跨平台逻辑，它们当前也不计入 Windows
+  baseline。
+- 当前 Windows preset 没有直接用 label 做最终运行过滤，而是用 test-name
+  子集来落实这一保守边界；label 仍然保留为文档化语义分类。
 
 ## `test.sh` section map 约定
 
@@ -181,7 +230,8 @@
 下列证据必须显式按 Linux-primary 或 Linux-specific 解释：
 
 - 时序敏感的 flaky 验收路径
-- 未来的 exact durability failure injection 分组
+- exact durability failure injection 分组，或对应带有
+  `linux-specific-failure-injection` 标签的 CTest executable
 - 依赖 Bash-first 执行和 `--keep-data` 现场保留的流程
 
 因此：
@@ -212,7 +262,13 @@
   - `.\test.ps1 -All`
   - `cmake --preset windows`
   - `cmake --build --preset windows-release`
-  - `ctest --preset windows-tests`
+  - `ctest --preset windows-release-tests`
+  - `cmake --build --preset windows-debug`
+  - `ctest --preset windows-debug-tests`
+- 其中 Windows test preset 默认只覆盖 `platform-neutral-fallback`
+  baseline 子集，不运行 Linux-specific failure-injection / diagnosis /
+  durability-boundary executable，也不默认包含更大范围的 cluster-style
+  `platform-neutral` executable。
 - 若需要更细粒度重跑，可使用与 `test.sh` 对应的直接 `ctest --test-dir build -R`
   命令，但解释范围仍属于 platform-neutral logic fallback。
 - `test.ps1` 只是 Windows wrapper，不得把它描述成与 Linux Bash 主入口

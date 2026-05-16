@@ -99,6 +99,9 @@ ctest --preset debug-tests --output-on-failure
 - 它适合平台无关的逻辑回归，不自动等价于 Linux-specific crash-style 或 failure-injection 证据。
 - 当 `validation-matrix.md` 中某项被标记为 Linux-specific 时，`ctest --preset debug-tests`
   只能作为逻辑回归 fallback，不能替代 Linux runtime 语义验证。
+- 若需要进一步判断命中的受管测试是否包含 Linux-specific
+  failure-injection / diagnosis 语义，应回看 `tests/CMakeLists.txt` 中的
+  CTest label 约定，以及 `validation-matrix.md` 的标签解释。
 
 ## 7. Windows preset fallback
 
@@ -112,15 +115,20 @@ ctest --preset debug-tests --output-on-failure
 
 - `test.ps1` 是 Windows PowerShell fallback wrapper。
 - `windows` configure preset 保持现有 Visual Studio 17 2022 multi-config 配置不变。
-- `windows-release` 只补齐 Release 构建入口，使用低并发 `jobs: 2`。
-- `windows-tests` 只代表 platform-neutral fallback，使用 `configuration: Release`、
-  `execution.jobs: 1` 和 `outputOnFailure: true`。
+- `windows-release` 是当前 Windows Release 构建入口。
+- `windows-release-tests` 只代表 Windows Release 的 platform-neutral fallback，
+  当前只运行保守 test-name 子集：
+  `CommandTest`、`KvStateMachineTest`、`TimerSchedulerTest`、`ThreadPoolTest`。
+- 如需额外验证 Debug 路径，使用 `windows-debug` 与 `windows-debug-tests`。
+- `platform-neutral-fallback` 比完整的 `platform-neutral` 语义桶更保守。
+- 若某个 executable 没有 `platform-neutral-fallback`，即使它仍带有
+  `platform-neutral` 语义，也不代表它已经被纳入 Windows 默认 fallback 验证。
 - `.\test.ps1 -All` 的底层等价流程仍然是：
 
 ```bash
 cmake --preset windows
 cmake --build --preset windows-release
-ctest --preset windows-tests
+ctest --preset windows-release-tests
 ```
 
 - 这组命令不等价于 Linux-specific crash-style、failure-injection、

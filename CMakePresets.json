@@ -81,9 +81,14 @@
         },
         {
             "name": "windows-debug-tests",
-            "displayName": "Run Windows Debug tests",
+            "displayName": "Run Windows Debug platform-neutral tests",
             "configurePreset": "windows",
             "configuration": "Debug",
+            "filter": {
+                "include": {
+                    "name": "^(CommandTest|KvStateMachineTest|TimerSchedulerTest|ThreadPoolTest)\\."
+                }
+            },
             "execution": {
                 "jobs": 4
             },
@@ -93,9 +98,14 @@
         },
         {
             "name": "windows-release-tests",
-            "displayName": "Run Windows Release tests",
+            "displayName": "Run Windows Release platform-neutral tests",
             "configurePreset": "windows",
             "configuration": "Release",
+            "filter": {
+                "include": {
+                    "name": "^(CommandTest|KvStateMachineTest|TimerSchedulerTest|ThreadPoolTest)\\."
+                }
+            },
             "execution": {
                 "jobs": 4
             },

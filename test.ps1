@@ -13,7 +13,7 @@ $ErrorActionPreference = "Stop"
 
 $script:ConfigurePreset = "windows"
 $script:BuildPreset = "windows-release"
-$script:TestPreset = "windows-tests"
+$script:TestPreset = "windows-release-tests"
 
 function Show-Usage {
     @"
@@ -30,11 +30,14 @@ Usage:
 Windows platform-neutral fallback:
   - Configure preset: windows
   - Build preset: windows-release
-  - Test preset: windows-tests
+  - Test preset: windows-release-tests
+    (current subset: CommandTest / KvStateMachineTest / TimerSchedulerTest / ThreadPoolTest)
 
 Notes:
   - This wrapper does not call Bash.
   - This wrapper only runs the Windows platform-neutral fallback flow.
+  - This fallback is a conservative baseline subset, not the full cross-platform semantic test bucket.
+  - The current Windows preset implementation uses a conservative test-name subset that corresponds to the documented platform-neutral fallback intent.
   - Linux-specific groups and Linux Bash-first retained-artifact flows remain in ./test.sh.
 "@ | Write-Host
 }
@@ -83,6 +86,7 @@ Write-Host "Windows platform-neutral fallback validation"
 Write-Host "Project root: $projectRoot"
 Write-Host "Linux primary entry remains: ./test.sh"
 Write-Host "PowerShell fallback presets: $script:ConfigurePreset / $script:BuildPreset / $script:TestPreset"
+Write-Host "CTest fallback subset: CommandTest / KvStateMachineTest / TimerSchedulerTest / ThreadPoolTest"
 
 Push-Location $projectRoot
 try {
