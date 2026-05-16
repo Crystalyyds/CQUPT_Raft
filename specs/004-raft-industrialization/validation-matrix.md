@@ -83,12 +83,11 @@ cross-platform gaps are scheduled for follow-up work.
 
 - `cmake --preset debug-ninja-low-parallel`: PASS
 - `cmake --build --preset debug-ninja-low-parallel`: PASS
-- `ctest --preset debug-tests --output-on-failure`: FAIL
-  - `tests/CMakeLists.txt` 的现有 label contract 没有破坏 test discovery
-  - 当前失败集中在 cluster-style / runtime-heavy suites，失败类型以
-    `Subprocess aborted` 为主，因此该结果不会把
-    Linux-specific failure-injection 或 durability-boundary 重新解释成
-    platform-neutral 证据
+- `ctest --preset debug-tests --output-on-failure`: PASS
+  - Linux 受管 CTest 当前 `104/104` 通过
+  - Label 统计：`platform-neutral` 100 个测试，`durability-boundary` 4 个测试
+  - 该结果说明 Linux CTest fallback 当前已全绿，但不改变
+    Linux-specific failure-injection / durability-boundary 的平台解释边界
 - `CTEST_PARALLEL_LEVEL=1 ./test.sh --group persistence`: PASS
 
 本次验证固定的解释边界：
@@ -112,7 +111,7 @@ cross-platform gaps are scheduled for follow-up work.
   `linux-specific-failure-injection`、`linux-primary-diagnosis` 标签边界已明确
 - `T027`：已完成，`platform-support.md` 已记录 Linux / Windows 当前支持范围
 - `T028`：已完成，`quickstart.md` 与 `tests/README.md` 已补齐维护者入口说明
-- `T029`：已完成，当前 Linux / Windows 入口结果、现存红灯与后续 follow-up
+- `T029`：已完成，当前 Linux / Windows 入口结果、平台边界与后续 follow-up
   已统一记录
 
 当前文档化结果：
@@ -121,9 +120,10 @@ cross-platform gaps are scheduled for follow-up work.
   - `cmake --preset debug-ninja-low-parallel`：PASS
   - `cmake --build --preset debug-ninja-low-parallel`：PASS
   - `CTEST_PARALLEL_LEVEL=1 ./test.sh --group persistence`：PASS
-  - `ctest --preset debug-tests --output-on-failure`：当前 FAIL
-  - `debug-tests` 的当前失败继续解释为 cluster/runtime-heavy 现存红灯，
-    不在 `T029` 修复
+  - `ctest --preset debug-tests --output-on-failure`：PASS
+  - Linux 受管 CTest 当前 `104/104` 通过
+  - Label 统计：`platform-neutral` 100 个测试，`durability-boundary` 4 个测试
+  - 当前不再记录 `debug-tests` / cluster-runtime 红灯
 - Windows：
   - `cmake --preset windows`：PASS
   - `cmake --build --preset windows-release`：PASS
@@ -146,44 +146,46 @@ cross-platform gaps are scheduled for follow-up work.
 
 ### T032 最终验收扫尾结果
 
-本次 `T032` 依据 `quickstart.md` 执行 Linux 最终验收扫尾，只记录命令结果、
-失败分类与日志路径，不把失败解释成通过：
+本次 `T032` 依据最新 Linux / Windows 验证结果更新最终验收状态，只记录
+命令结果与解释边界，不改变生产代码、测试源码或平台语义。
 
 - `cmake --preset debug-ninja-low-parallel`
-  - FAIL
-  - 失败分类：configure failure
-  - 日志路径：`tmp/test-logs/t032-linux-configure.log`
+  - PASS
 - `cmake --build --preset debug-ninja-low-parallel`
-  - FAIL
-  - 失败分类：build failure
-  - 日志路径：`tmp/test-logs/t032-linux-build.log`
-- `CTEST_PARALLEL_LEVEL=1 ./test.sh --group all --keep-data`
-  - FAIL
-  - 失败分类：Linux Bash primary sweep failure
-  - 日志路径：`tmp/test-logs/t032-linux-group-all.log`
+  - PASS
 - `ctest --preset debug-tests --output-on-failure`
-  - FAIL
-  - 失败分类：cluster/runtime-heavy existing red
-  - 日志路径：`tmp/test-logs/t032-debug-tests.log`
+  - PASS
+  - `104/104` tests passed
+  - Label 统计：`platform-neutral` 100 个测试，`durability-boundary` 4 个测试
+- `cmake --preset windows`
+  - PASS
+- `cmake --build --preset windows-release`
+  - PASS
+- `ctest --preset windows-release-tests --output-on-failure`
+  - PASS
+  - `18/18` tests passed
+  - 当前只覆盖 Windows 保守 fallback baseline：`CommandTest`、
+    `KvStateMachineTest`、`TimerSchedulerTest`、`ThreadPoolTest`
 
 当前收口解释：
 
 - P0：
-  - Linux flaky / runtime-heavy 风险没有因为本次最终扫尾而收口为全绿。
+  - Linux 受管 CTest 当前已全绿，`debug-tests` 不再作为现存红灯记录。
   - exact durability / failure-injection 仍继续按 Linux-specific 主验收解释，
     不转写为 Windows 等价证据。
 - P1：
-  - catch-up、leader switch、apply/replay 的既有 managed regression evidence
-    继续保留为文档化证据；本次 `T032` 没有新增通过结果，也没有授权扩大解释范围。
+  - catch-up、leader switch、apply/replay 的 managed regression evidence
+    继续保留为文档化证据；当前 Linux CTest 全绿进一步确认这些受管回归
+    没有遗留红灯。
 - P2：
   - Linux Bash 主入口、CTest fallback、Windows preset fallback、
-    PowerShell fallback 的入口约定仍然成立，但“入口已文档化”不等于“当前
-    Linux 全量最终扫尾已全绿”。
+    PowerShell fallback 的入口约定仍然成立。
+  - Windows fallback 当前仍是保守 baseline，不解释为 Windows Raft 全功能通过。
 - P3：
   - failure-localization、平台支持矩阵、quickstart 与 tests README 的文档
-    范围已收口；Windows fallback 仍只代表保守 baseline。
+    范围已收口；Linux 当前受管 CTest 全绿，Windows fallback 保持保守 baseline。
 - P4：
-  - Windows/macOS 更深的 runtime validation、durability 等价语义与 CI
+  - Windows 更深的 runtime validation、durability 等价语义与 CI
     扩展继续保留为 follow-up，不写成已完成。
 
 ## CTest Label Matrix

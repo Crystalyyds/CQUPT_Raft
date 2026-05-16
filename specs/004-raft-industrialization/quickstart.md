@@ -56,15 +56,18 @@ CTEST_PARALLEL_LEVEL=1 ./test.sh --group all
 - `cmake --preset debug-ninja-low-parallel`：PASS
 - `cmake --build --preset debug-ninja-low-parallel`：PASS
 - `./test.sh --group persistence`：PASS
-- `ctest --preset debug-tests --output-on-failure`：当前仍有
-  cluster/runtime-heavy 现存红灯，本任务不修复这些失败
+- `ctest --preset debug-tests --output-on-failure`：PASS
+- Linux 受管 CTest 当前 `104/104` 通过
+- Label 统计：`platform-neutral` 100 个测试，`durability-boundary` 4 个测试
 
 解释规则：
 
 - `persistence` 当前已经通过，可作为 Linux restart / durability 主回归入口之一。
-- `debug-tests` 当前 FAIL 不代表 Linux 主入口失效，也不代表标签契约失效。
+- `debug-tests` 当前已全绿，可作为 Linux CTest fallback 和受管测试总入口。
 - Linux-specific durability / failure-injection / crash-style 语义仍以
   `./test.sh` 主入口解释。
+- Windows fallback 仍只是保守 baseline，不因为 Linux `debug-tests` 全绿而扩大为
+  Windows Raft 全功能通过。
 
 ## 4. 失败后先看哪里
 
@@ -160,8 +163,8 @@ ctest --preset debug-tests --output-on-failure
 - 若需要进一步判断命中的受管测试是否包含 Linux-specific
   failure-injection / diagnosis 语义，应回看 `tests/CMakeLists.txt` 中的
   CTest label 约定，以及 `validation-matrix.md` 的标签解释。
-- 当前 Linux 上的 `debug-tests` 仍有 cluster/runtime-heavy 现存红灯，因此它现在
-  不是“全量已绿的统一入口”。
+- 当前 Linux 上的 `debug-tests` 已全绿，当前记录为 `104/104` tests passed；
+  其中 `platform-neutral` 100 个测试、`durability-boundary` 4 个测试通过。
 
 ## 8. Windows fallback 怎么跑
 

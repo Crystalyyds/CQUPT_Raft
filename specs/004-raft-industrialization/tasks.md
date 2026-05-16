@@ -497,6 +497,8 @@
   Windows/macOS Fallback: Yes.
   Basis: `plan.md` Acceptance By Priority；`quickstart.md` implementation order。
   Tests To Run: `cmake --preset debug-ninja-low-parallel`; `cmake --build --preset debug-ninja-low-parallel`; `CTEST_PARALLEL_LEVEL=1 ./test.sh --group all --keep-data`; `ctest --preset debug-tests --output-on-failure`.
+  Result: Linux `ctest --preset debug-tests --output-on-failure` passed with `104/104` tests passed (`platform-neutral`: 100, `durability-boundary`: 4). Windows `ctest --preset windows-release-tests` passed with `18/18` tests passed in the conservative fallback baseline.
+  Execution Note: Windows fallback remains limited to `CommandTest`, `KvStateMachineTest`, `TimerSchedulerTest`, and `ThreadPoolTest`; this does not imply full Windows Raft coverage or Windows equivalence for Linux-specific durability/failure-injection semantics.
 
 ---
 
