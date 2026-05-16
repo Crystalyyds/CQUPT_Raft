@@ -144,6 +144,48 @@ cross-platform gaps are scheduled for follow-up work.
 - 当前 `US3` 可以按“验证入口与状态文档已收口、运行时扩大验证仍留作
   follow-up”来理解
 
+### T032 最终验收扫尾结果
+
+本次 `T032` 依据 `quickstart.md` 执行 Linux 最终验收扫尾，只记录命令结果、
+失败分类与日志路径，不把失败解释成通过：
+
+- `cmake --preset debug-ninja-low-parallel`
+  - FAIL
+  - 失败分类：configure failure
+  - 日志路径：`tmp/test-logs/t032-linux-configure.log`
+- `cmake --build --preset debug-ninja-low-parallel`
+  - FAIL
+  - 失败分类：build failure
+  - 日志路径：`tmp/test-logs/t032-linux-build.log`
+- `CTEST_PARALLEL_LEVEL=1 ./test.sh --group all --keep-data`
+  - FAIL
+  - 失败分类：Linux Bash primary sweep failure
+  - 日志路径：`tmp/test-logs/t032-linux-group-all.log`
+- `ctest --preset debug-tests --output-on-failure`
+  - FAIL
+  - 失败分类：cluster/runtime-heavy existing red
+  - 日志路径：`tmp/test-logs/t032-debug-tests.log`
+
+当前收口解释：
+
+- P0：
+  - Linux flaky / runtime-heavy 风险没有因为本次最终扫尾而收口为全绿。
+  - exact durability / failure-injection 仍继续按 Linux-specific 主验收解释，
+    不转写为 Windows 等价证据。
+- P1：
+  - catch-up、leader switch、apply/replay 的既有 managed regression evidence
+    继续保留为文档化证据；本次 `T032` 没有新增通过结果，也没有授权扩大解释范围。
+- P2：
+  - Linux Bash 主入口、CTest fallback、Windows preset fallback、
+    PowerShell fallback 的入口约定仍然成立，但“入口已文档化”不等于“当前
+    Linux 全量最终扫尾已全绿”。
+- P3：
+  - failure-localization、平台支持矩阵、quickstart 与 tests README 的文档
+    范围已收口；Windows fallback 仍只代表保守 baseline。
+- P4：
+  - Windows/macOS 更深的 runtime validation、durability 等价语义与 CI
+    扩展继续保留为 follow-up，不写成已完成。
+
 ## CTest Label Matrix
 
 | Label | Meaning | Platform scope | Interpretation boundary |
@@ -188,22 +230,22 @@ artifacts are needed for diagnosis.
 
 | Group | Primary purpose | Failure classification focus | Linux primary / Linux-specific | Minimal rerun command | When to add `--keep-data` | Platform-neutral fallback |
 |------|------------------|------------------------------|-------------------------------|-----------------------|---------------------------|---------------------------|
-| `snapshot-recovery` | Snapshot/restart recovery path | leader churn during recovery, snapshot restore failure, restart trusted-state mismatch | Linux primary hotspot | `CTEST_PARALLEL_LEVEL=1 ./test.sh --group snapshot-recovery` | When restart artifacts, snapshot dirs, or retained node data are needed | `CTEST_PARALLEL_LEVEL=1 ctest --test-dir build --output-on-failure -R '^RaftSnapshotRecoveryTest\.'` |
-| `diagnosis` | Recovery diagnostics and snapshot fallback | snapshot skip/fallback, invalid snapshot rejection, restart explanation gaps | Linux primary hotspot | `CTEST_PARALLEL_LEVEL=1 ./test.sh --group diagnosis` | When snapshot skip/fallback evidence must be retained | `CTEST_PARALLEL_LEVEL=1 ctest --test-dir build --output-on-failure -R '^RaftSnapshotDiagnosisTest\.'` |
-| `snapshot-catchup` | Lagging follower catch-up and snapshot handoff | follower catch-up gap, snapshot handoff sequencing, restart after catch-up | Linux primary grouped rerun | `CTEST_PARALLEL_LEVEL=1 ./test.sh --group snapshot-catchup` | When follower catch-up state or retained snapshot/log artifacts are needed | `CTEST_PARALLEL_LEVEL=1 ctest --test-dir build --output-on-failure -R '^RaftSnapshotCatchupTest\.'` |
-| `replicator` | Single follower replication state machine | replication state drift, backoff, follower catch-up behavior | Linux primary grouped rerun | `CTEST_PARALLEL_LEVEL=1 ./test.sh --group replicator` | When retained per-node data helps explain replication drift | `CTEST_PARALLEL_LEVEL=1 ctest --test-dir build --output-on-failure -R '^RaftReplicatorBehaviorTest\.'` |
-| `segment-cluster` | Clustered segment/snapshot stress path | segment rollover, clustered snapshot generation, retained-artifact stress failures | Linux primary grouped rerun | `CTEST_PARALLEL_LEVEL=1 ./test.sh --group segment-cluster` | When generated segment/snapshot trees must be inspected | `CTEST_PARALLEL_LEVEL=1 ctest --test-dir build --output-on-failure -R '^RaftSegmentStorageTest\.RaftClusterGeneratesManySnapshotsAndSegmentLogsUnderBuildDirectory$'` |
+| `snapshot-recovery` | Snapshot/restart recovery path | leader churn during recovery, snapshot restore failure, restart trusted-state mismatch | Linux primary hotspot | `CTEST_PARALLEL_LEVEL=1 ./test.sh --group snapshot-recovery` | When restart artifacts, snapshot dirs, or retained node data are needed | `CTEST_PARALLEL_LEVEL=1 ctest --test-dir build/linux --output-on-failure -R '^RaftSnapshotRecoveryTest\.'` |
+| `diagnosis` | Recovery diagnostics and snapshot fallback | snapshot skip/fallback, invalid snapshot rejection, restart explanation gaps | Linux primary hotspot | `CTEST_PARALLEL_LEVEL=1 ./test.sh --group diagnosis` | When snapshot skip/fallback evidence must be retained | `CTEST_PARALLEL_LEVEL=1 ctest --test-dir build/linux --output-on-failure -R '^RaftSnapshotDiagnosisTest\.'` |
+| `snapshot-catchup` | Lagging follower catch-up and snapshot handoff | follower catch-up gap, snapshot handoff sequencing, restart after catch-up | Linux primary grouped rerun | `CTEST_PARALLEL_LEVEL=1 ./test.sh --group snapshot-catchup` | When follower catch-up state or retained snapshot/log artifacts are needed | `CTEST_PARALLEL_LEVEL=1 ctest --test-dir build/linux --output-on-failure -R '^RaftSnapshotCatchupTest\.'` |
+| `replicator` | Single follower replication state machine | replication state drift, backoff, follower catch-up behavior | Linux primary grouped rerun | `CTEST_PARALLEL_LEVEL=1 ./test.sh --group replicator` | When retained per-node data helps explain replication drift | `CTEST_PARALLEL_LEVEL=1 ctest --test-dir build/linux --output-on-failure -R '^RaftReplicatorBehaviorTest\.'` |
+| `segment-cluster` | Clustered segment/snapshot stress path | segment rollover, clustered snapshot generation, retained-artifact stress failures | Linux primary grouped rerun | `CTEST_PARALLEL_LEVEL=1 ./test.sh --group segment-cluster` | When generated segment/snapshot trees must be inspected | `CTEST_PARALLEL_LEVEL=1 ctest --test-dir build/linux --output-on-failure -R '^RaftSegmentStorageTest\.RaftClusterGeneratesManySnapshotsAndSegmentLogsUnderBuildDirectory$'` |
 
 Notes:
 
 - `--keep-data` is a Linux Bash-first capability. It retains `raft_data/`,
-  `raft_snapshots/`, and `build/tests/raft_test_data/` for local diagnosis.
+  `raft_snapshots/`, and `build/linux/tests/raft_test_data/` for local diagnosis.
 - `test.sh` must document `--keep-data` next to the section map and state that
   the first rerun step is `CTEST_PARALLEL_LEVEL=1 ./test.sh --group <name>`,
   with `--keep-data` added only when retained artifacts are needed.
 - For Windows/macOS, the fallback entry remains
   `ctest --preset debug-tests --output-on-failure` or the corresponding direct
-  `ctest --test-dir build ... -R ...` command. On Windows, `.\test.ps1 -All`
+  `ctest --test-dir build/linux ... -R ...` command. On Windows, `.\test.ps1 -All`
   is the preferred one-command wrapper for the existing preset-based fallback.
   These fallbacks provide logic regression only and do not claim
   Linux-equivalent retained-artifact or crash-style runtime evidence.
@@ -279,9 +321,9 @@ For all rows above:
 
 | Evidence area | Covered scenarios | Entrypoint | Latest status | Platform scope |
 |---------------|-------------------|------------|---------------|----------------|
-| Hard-state and log-boundary restart matrix | old-meta/new-log, new-meta/old-log, commit/apply clamp, missing first segment, final segment tail truncate 后 trusted log prefix 选择 | `CTEST_PARALLEL_LEVEL=1 ctest --test-dir build --output-on-failure -R '^(PersistenceTest|RaftSegmentStorageTest)\.'` | PASS | 平台无关恢复逻辑证据；如涉及 exact durability 边界，则由 Linux-specific 注入测试补充 |
-| Snapshot metadata and applied-state restart matrix | invalid snapshot rejection, all-invalid fallback, metadata mismatch, corrupted newest snapshot fallback, trusted snapshot 选择后一致的 applied replay | `CTEST_PARALLEL_LEVEL=1 ctest --test-dir build --output-on-failure -R '^(RaftSnapshotRecoveryTest|RaftSnapshotDiagnosisTest)\.'` | PASS | 平台无关恢复逻辑证据 |
-| Linux-specific durability failure injection and diagnostics | meta/log/snapshot 的 file sync、directory sync、replace/rename、prune/remove、partial write 边界及对应 trusted-state 预期 | `CTEST_PARALLEL_LEVEL=1 ctest --test-dir build --output-on-failure -R '^(PersistenceTest|RaftSegmentStorageTest|SnapshotStorageReliabilityTest|RaftSnapshotRecoveryTest)\.'` | PASS | Linux-specific runtime evidence；对应 executable 在 CTest 中应带 `linux-specific-failure-injection` 与 `durability-boundary` 标签；Windows 侧仅保留 platform-neutral fallback，不声称等价注入语义 |
+| Hard-state and log-boundary restart matrix | old-meta/new-log, new-meta/old-log, commit/apply clamp, missing first segment, final segment tail truncate 后 trusted log prefix 选择 | `CTEST_PARALLEL_LEVEL=1 ctest --test-dir build/linux --output-on-failure -R '^(PersistenceTest|RaftSegmentStorageTest)\.'` | PASS | 平台无关恢复逻辑证据；如涉及 exact durability 边界，则由 Linux-specific 注入测试补充 |
+| Snapshot metadata and applied-state restart matrix | invalid snapshot rejection, all-invalid fallback, metadata mismatch, corrupted newest snapshot fallback, trusted snapshot 选择后一致的 applied replay | `CTEST_PARALLEL_LEVEL=1 ctest --test-dir build/linux --output-on-failure -R '^(RaftSnapshotRecoveryTest|RaftSnapshotDiagnosisTest)\.'` | PASS | 平台无关恢复逻辑证据 |
+| Linux-specific durability failure injection and diagnostics | meta/log/snapshot 的 file sync、directory sync、replace/rename、prune/remove、partial write 边界及对应 trusted-state 预期 | `CTEST_PARALLEL_LEVEL=1 ctest --test-dir build/linux --output-on-failure -R '^(PersistenceTest|RaftSegmentStorageTest|SnapshotStorageReliabilityTest|RaftSnapshotRecoveryTest)\.'` | PASS | Linux-specific runtime evidence；对应 executable 在 CTest 中应带 `linux-specific-failure-injection` 与 `durability-boundary` 标签；Windows 侧仅保留 platform-neutral fallback，不声称等价注入语义 |
 
 Current US1 status:
 
@@ -293,9 +335,9 @@ Current US1 status:
 
 | Evidence area | Covered scenarios | Entrypoint | Latest status | Platform scope |
 |---------------|-------------------|------------|---------------|----------------|
-| Catch-up and snapshot handoff consistency | follower 落后 live log 后通过 log replay catch-up 恢复；follower 落后到 retained snapshot boundary 后通过 snapshot handoff catch-up 恢复；catch-up 后 committed ordering 保持一致 | `CTEST_PARALLEL_LEVEL=1 ctest --test-dir build --output-on-failure -R '^(RaftSnapshotCatchupTest|RaftIntegrationTest)\.'` | PASS | 平台无关 cluster consistency 逻辑证据 |
-| Leader-switch and commit/apply ordering consistency | leader 切换后 committed state 保持不变；新 leader 继续推进新日志；lagging follower、leader switch 与新 proposal 混合时 commit/apply 不逆序 | `CTEST_PARALLEL_LEVEL=1 ctest --test-dir build --output-on-failure -R '^(RaftLeaderSwitchOrderingTest)\.'` | PASS | 平台无关 cluster consistency 逻辑证据 |
-| State-machine replay consistency | snapshot load 后 tail replay 不丢失；restart 后 committed log apply 一致；state machine 最终视图与 committed/applied 状态一致；duplicate apply / missed apply 风险受回归保护 | `CTEST_PARALLEL_LEVEL=1 ctest --test-dir build --output-on-failure -R '^(KvStateMachineTest|RaftSnapshotRecoveryTest)\.'` | PASS | 平台无关 replay / restart consistency 逻辑证据 |
+| Catch-up and snapshot handoff consistency | follower 落后 live log 后通过 log replay catch-up 恢复；follower 落后到 retained snapshot boundary 后通过 snapshot handoff catch-up 恢复；catch-up 后 committed ordering 保持一致 | `CTEST_PARALLEL_LEVEL=1 ctest --test-dir build/linux --output-on-failure -R '^(RaftSnapshotCatchupTest|RaftIntegrationTest)\.'` | PASS | 平台无关 cluster consistency 逻辑证据 |
+| Leader-switch and commit/apply ordering consistency | leader 切换后 committed state 保持不变；新 leader 继续推进新日志；lagging follower、leader switch 与新 proposal 混合时 commit/apply 不逆序 | `CTEST_PARALLEL_LEVEL=1 ctest --test-dir build/linux --output-on-failure -R '^(RaftLeaderSwitchOrderingTest)\.'` | PASS | 平台无关 cluster consistency 逻辑证据 |
+| State-machine replay consistency | snapshot load 后 tail replay 不丢失；restart 后 committed log apply 一致；state machine 最终视图与 committed/applied 状态一致；duplicate apply / missed apply 风险受回归保护 | `CTEST_PARALLEL_LEVEL=1 ctest --test-dir build/linux --output-on-failure -R '^(KvStateMachineTest|RaftSnapshotRecoveryTest)\.'` | PASS | 平台无关 replay / restart consistency 逻辑证据 |
 
 Current US2 status:
 
@@ -324,7 +366,7 @@ Current US2 status:
 - retained-artifact diagnosis:
   若后续需要保留 `raft_data/`、`raft_snapshots/` 或构造现场进行人工诊断，当前仍以 Linux Bash-first 的 `--keep-data` 流程为主；这属于诊断便利性差异，不影响已记录的 US2 平台无关逻辑证据。
 - cross-platform runtime follow-up:
-  Windows/macOS 目前仍以 `ctest --test-dir build ...` 的平台无关逻辑回归为主，尚未补充与 Linux 主验收等价的长链路运行时观察；这仍属于 `W6/W8` 的后续范围，而不是 US2 未完成项。
+  Windows/macOS 目前仍以 `ctest --test-dir build/linux ...` 的平台无关逻辑回归为主，尚未补充与 Linux 主验收等价的长链路运行时观察；这仍属于 `W6/W8` 的后续范围，而不是 US2 未完成项。
 
 ## Current Risk Register
 

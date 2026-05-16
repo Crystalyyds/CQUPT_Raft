@@ -16,13 +16,13 @@ set -Eeuo pipefail
 #
 # --keep-data:
 #   Linux Bash-first retained-artifact mode for reruns that need
-#   raft_data / raft_snapshots / build/tests/raft_test_data for diagnosis.
+#   raft_data / raft_snapshots / build/linux/tests/raft_test_data for diagnosis.
 #
 # Non-Bash / cross-platform fallback:
 #   ctest --preset debug-tests --output-on-failure
 
 PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-BUILD_DIR="${PROJECT_ROOT}/build"
+BUILD_DIR="${PROJECT_ROOT}/build/linux"
 
 DO_CLEAN=0
 DO_CONFIGURE=1
@@ -75,7 +75,7 @@ Linux Bash primary sweep:
 
 --keep-data:
   Keep Linux test artifacts under raft_data / raft_snapshots /
-  build/tests/raft_test_data for failure diagnosis.
+  build/linux/tests/raft_test_data for failure diagnosis.
   Use it when investigating restart, snapshot, catch-up, replicator, or
   segment-cluster failures. This is a Linux Bash-first workflow and is not
   replaced by the non-Bash fallback.
@@ -162,7 +162,7 @@ Linux Bash primary sweep:
 
 --keep-data:
   Linux Bash-first retained-artifact mode for raft_data / raft_snapshots /
-  build/tests/raft_test_data.
+  build/linux/tests/raft_test_data.
 
 Failure rerun guide:
   Re-run the failed group with CTEST_PARALLEL_LEVEL=1.

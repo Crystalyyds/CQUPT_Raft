@@ -237,7 +237,7 @@ CTEST_PARALLEL_LEVEL=1 ./test.sh --group all
 
 - `raft_data/`
 - `raft_snapshots/`
-- `build/tests/raft_test_data/`
+- `build/linux/tests/raft_test_data/`
 
 ## 7. CMake / GoogleTest 管理说明
 

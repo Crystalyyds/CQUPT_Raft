@@ -275,7 +275,7 @@
   baseline 子集，不运行 Linux-specific failure-injection / diagnosis /
   durability-boundary executable，也不默认包含更大范围的 cluster-style
   `platform-neutral` executable。
-- 若需要更细粒度重跑，可使用与 `test.sh` 对应的直接 `ctest --test-dir build -R`
+- 若需要更细粒度重跑，可使用与 `test.sh` 对应的直接 `ctest --test-dir build/linux -R`
   命令，但解释范围仍属于 platform-neutral logic fallback。
 - `test.ps1` 只是 Windows wrapper，不得把它描述成与 Linux Bash 主入口
   完全等价。

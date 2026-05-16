@@ -116,7 +116,7 @@ CTEST_PARALLEL_LEVEL=1 ./test.sh --group all --keep-data
 
 - `raft_data/`
 - `raft_snapshots/`
-- `build/tests/raft_test_data/`
+- `build/linux/tests/raft_test_data/`
 
 ## 6. 高风险区域的真实 rerun 命令
 

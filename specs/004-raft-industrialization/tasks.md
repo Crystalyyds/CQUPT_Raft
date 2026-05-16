@@ -66,7 +66,7 @@
   Linux-Specific: Yes, 当前 blocker 来源于 Linux 主验收。
   Windows/macOS Fallback: Yes, 用 `ctest --preset debug-tests` 作为平台无关回归入口，不要求同等时序证据。
   Basis: `specs/003-persistence-reliability/progress.md` Blocked 中的 `RaftSnapshotRecoveryTest...` flaky；`plan.md` W1。
-  Tests To Run: `CTEST_PARALLEL_LEVEL=1 ctest --test-dir build --output-on-failure -R '^RaftSnapshotRecoveryTest\.SavesSnapshotAndRestoresAfterRestart$'`
+  Tests To Run: `CTEST_PARALLEL_LEVEL=1 ctest --test-dir build/linux --output-on-failure -R '^RaftSnapshotRecoveryTest\.SavesSnapshotAndRestoresAfterRestart$'`
   Result: `Passed`, `1/1 tests passed`
   Execution Note: 实际命中的测试定义位于 `tests/snapshot_test.cpp`；本次未修改生产代码。
 
@@ -81,7 +81,7 @@
   Linux-Specific: Yes, 当前 blocker 来源于 Linux 主验收。
   Windows/macOS Fallback: Yes, 该场景在非 Linux 先走平台无关 rerun，不承诺 crash-style 等价。
   Basis: `specs/003-persistence-reliability/progress.md` Blocked 中的 `RaftSplitBrainTest...` flaky；`plan.md` W1。
-  Tests To Run: `CTEST_PARALLEL_LEVEL=1 ctest --test-dir build --output-on-failure -R '^RaftSplitBrainTest\.MinorityLeaderTimesOutAndDoesNotApplyUncommittedCommand$'`
+  Tests To Run: `CTEST_PARALLEL_LEVEL=1 ctest --test-dir build/linux --output-on-failure -R '^RaftSplitBrainTest\.MinorityLeaderTimesOutAndDoesNotApplyUncommittedCommand$'`
   Result: `Passed`, `1/1 tests passed`
   Execution Note: 修改文件为 `tests/test_raft_split_brain.cpp`；本次未修改生产代码；`--repeat until-fail:3` 未执行，因此无 repeat 结果可记录。
 
@@ -120,7 +120,7 @@
   Linux-Specific: Yes, 精确 durability 注入以 Linux 为主。
   Windows/macOS Fallback: Yes, 非 Linux 只保留平台无关恢复测试与文档说明。
   Basis: `specs/003-persistence-reliability/progress.md` Blocked T613-T616；`plan.md` W2/W3。
-  Tests To Run: `./test.sh --group persistence`; `ctest --test-dir build --output-on-failure -R '^(PersistenceTest|RaftSegmentStorageTest)\.'`.
+  Tests To Run: `./test.sh --group persistence`; `ctest --test-dir build/linux --output-on-failure -R '^(PersistenceTest|RaftSegmentStorageTest)\.'`.
 
 - [x] T007 [P] [US1] Add snapshot publish/prune failure cases in `tests/test_snapshot_storage_reliability.cpp` and `tests/test_raft_snapshot_restart.cpp`
   Goal: 先写 failure injection 测试，覆盖 snapshot publish、directory sync、prune/remove 与 restart 选择规则。
@@ -146,7 +146,7 @@
   Linux-Specific: No.
   Windows/macOS Fallback: Not Required.
   Basis: 现状分析发现 `persistence_more_test.cpp` 未纳入 CTest；`plan.md` W3/W7。
-  Tests To Run: `./test.sh --group persistence`; `ctest --test-dir build --output-on-failure -R '^PersistenceTest\.'`.
+  Tests To Run: `./test.sh --group persistence`; `ctest --test-dir build/linux --output-on-failure -R '^PersistenceTest\.'`.
 
 ### Implementation for User Story 1
 
@@ -290,7 +290,7 @@
   Linux-Specific: No.
   Windows/macOS Fallback: Not Required.
   Basis: `plan.md` W5；`spec.md` FR-003/FR-004。
-  Tests To Run: `ctest --test-dir build --output-on-failure -R '^(KvStateMachineTest|RaftSnapshotRecoveryTest)\.'`; `./test.sh --group snapshot-recovery`.
+  Tests To Run: `ctest --test-dir build/linux --output-on-failure -R '^(KvStateMachineTest|RaftSnapshotRecoveryTest)\.'`; `./test.sh --group snapshot-recovery`.
 
 ### Implementation for User Story 2
 
@@ -333,7 +333,7 @@
   Linux-Specific: No.
   Windows/macOS Fallback: Yes.
   Basis: `plan.md` W5；`spec.md` FR-003；现状分析中的 apply/recovery consistency gap。
-  Tests To Run: `ctest --test-dir build --output-on-failure -R '^(KvStateMachineTest|RaftSnapshotRecoveryTest|RaftIntegrationTest)\.'`; `./test.sh --group snapshot-recovery`.
+  Tests To Run: `ctest --test-dir build/linux --output-on-failure -R '^(KvStateMachineTest|RaftSnapshotRecoveryTest|RaftIntegrationTest)\.'`; `./test.sh --group snapshot-recovery`.
   Execution Note: No-op。T018 的 state-machine replay consistency 回归测试已通过，未发现 `modules/raft/state_machine/state_machine.cpp` 或 `modules/raft/node/raft_node.cpp` 的真实实现缺口；本任务未修改生产代码。
 
 - [x] T022 [US2] Update `specs/004-raft-industrialization/validation-matrix.md` with US2 consistency evidence
@@ -485,7 +485,7 @@
   Basis: constitution IV；`plan.md` W8；`spec.md` SC-004。
   Tests To Run: None; 文档任务。
 
-- [ ] T032 Run final acceptance sweep from `specs/004-raft-industrialization/quickstart.md`
+- [x] T032 Run final acceptance sweep from `specs/004-raft-industrialization/quickstart.md`
   Goal: 用最终任务成果执行一次统一收口，确认 P0-P3 范围都有对应证据，P4 只留下明确 follow-up。
   Input: `quickstart.md`, `validation-matrix.md`, `platform-support.md`, all prior task outputs.
   Scope: 执行测试并更新文档结论，不改业务逻辑。
