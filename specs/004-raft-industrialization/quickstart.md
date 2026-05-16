@@ -21,7 +21,19 @@ Linux-specific 边界，都以它为准。
 5. 若不在 Linux 上且不适用 Windows preset，或只需要跑平台无关基线，使用
    `ctest --preset debug-tests` 作为 fallback。
 
-## 3. Linux 主验证入口
+## 3. Linux 主入口怎么跑
+
+当前 Linux 主入口是：
+
+```bash
+./test.sh
+```
+
+推荐一律配合低并发：
+
+```bash
+CTEST_PARALLEL_LEVEL=1
+```
 
 先构建：
 
@@ -39,7 +51,46 @@ CTEST_PARALLEL_LEVEL=1 ./test.sh --group all
 这是当前 Linux 主验证路径，与
 [validation-matrix.md](./validation-matrix.md) 中的 `Linux primary` 定义保持一致。
 
-## 4. 失败现场保留方式
+当前 Linux 已记录的状态：
+
+- `cmake --preset debug-ninja-low-parallel`：PASS
+- `cmake --build --preset debug-ninja-low-parallel`：PASS
+- `./test.sh --group persistence`：PASS
+- `ctest --preset debug-tests --output-on-failure`：当前仍有
+  cluster/runtime-heavy 现存红灯，本任务不修复这些失败
+
+解释规则：
+
+- `persistence` 当前已经通过，可作为 Linux restart / durability 主回归入口之一。
+- `debug-tests` 当前 FAIL 不代表 Linux 主入口失效，也不代表标签契约失效。
+- Linux-specific durability / failure-injection / crash-style 语义仍以
+  `./test.sh` 主入口解释。
+
+## 4. 失败后先看哪里
+
+如果 Linux 主入口失败，先不要直接扩大范围，优先按原 group 低并发重跑：
+
+```bash
+CTEST_PARALLEL_LEVEL=1 ./test.sh --group <group>
+```
+
+需要 retained artifacts 时，再追加：
+
+```bash
+CTEST_PARALLEL_LEVEL=1 ./test.sh --group <group> --keep-data
+```
+
+失败后优先查看：
+
+- [validation-matrix.md](./validation-matrix.md)
+  中的 group 解释、rerun 命令和 Linux-specific 边界
+- [platform-support.md](./platform-support.md)
+  中的平台支持范围与 Windows fallback 边界
+- [tests/README.md](/home/yangjilei/Code/C++/CQUPT_Raft/tests/README.md)
+  中的测试角色说明：哪些是受管回归、哪些是 manual-only /
+  diagnostic-only、哪些不进入 Windows fallback
+
+## 5. 如何使用 `--keep-data` 保留现场
 
 当需要保留失败现场、测试数据目录或辅助排障时，使用：
 
@@ -61,7 +112,13 @@ CTEST_PARALLEL_LEVEL=1 ./test.sh --group all --keep-data
 - 平台无关 `ctest --preset debug-tests` fallback 不默认提供等价的数据保留语义。
 - 如果需要 retained artifacts 进行排障，应优先回到 Linux 主入口重跑。
 
-## 5. 高风险区域的真实 rerun 命令
+重点保留的目录语义是：
+
+- `raft_data/`
+- `raft_snapshots/`
+- `build/tests/raft_test_data/`
+
+## 6. 高风险区域的真实 rerun 命令
 
 这些命令来自当前 `test.sh` 分组，必须与
 [validation-matrix.md](./validation-matrix.md) 保持一致：
@@ -86,7 +143,7 @@ CTEST_PARALLEL_LEVEL=1 ./test.sh --group all --keep-data
 - `replication`：日志复制与 commit/apply 主路径回归
 - `election`：选举与 split-brain 相关回归
 
-## 6. 平台无关 CTest fallback
+## 7. 平台无关 CTest fallback
 
 如果当前环境不走 Bash 主入口，或只需要执行平台无关的基础回归，使用：
 
@@ -103,8 +160,10 @@ ctest --preset debug-tests --output-on-failure
 - 若需要进一步判断命中的受管测试是否包含 Linux-specific
   failure-injection / diagnosis 语义，应回看 `tests/CMakeLists.txt` 中的
   CTest label 约定，以及 `validation-matrix.md` 的标签解释。
+- 当前 Linux 上的 `debug-tests` 仍有 cluster/runtime-heavy 现存红灯，因此它现在
+  不是“全量已绿的统一入口”。
 
-## 7. Windows preset fallback
+## 8. Windows fallback 怎么跑
 
 如果当前环境是 Windows，优先使用：
 
@@ -134,8 +193,40 @@ ctest --preset windows-release-tests
 
 - 这组命令不等价于 Linux-specific crash-style、failure-injection、
   directory sync 或 `--keep-data` 证据。
+- 不声明 Windows Raft 全功能通过。
+- 不声明 Windows 已等价验证 Linux-specific durability /
+  failure-injection。
 
-## 8. Linux-specific 测试组说明
+## 9. 哪些测试属于 Windows fallback，哪些不属于
+
+Windows fallback 当前只跑保守 baseline：
+
+- `CommandTest`
+- `KvStateMachineTest`
+- `TimerSchedulerTest`
+- `ThreadPoolTest`
+
+默认不进入 Windows platform-neutral fallback 的受管测试包括：
+
+- `RaftKvServiceTest`
+- `RaftElectionTest`
+- `RaftLogReplicationTest`
+- `RaftCommitApplyTest`
+- `RaftSplitBrainTest`
+- `RaftLeaderSwitchOrderingTest`
+- `PersistenceTest`
+- `RaftSnapshotRecoveryTest`
+- `RaftSnapshotDiagnosisTest`
+- `RaftSnapshotCatchupTest`
+- `RaftSnapshotRestartTest`
+- `RaftSegmentStorageTest`
+- `SnapshotStorageReliabilityTest`
+- `RaftReplicatorBehaviorTest`
+- `RaftIntegrationTest`
+
+更完整的测试角色边界见 [tests/README.md](/home/yangjilei/Code/C++/CQUPT_Raft/tests/README.md)。
+
+## 10. Linux-specific 测试组说明
 
 以下内容必须视为 Linux-primary 或 Linux-specific 证据，而不是跨平台已完成能力：
 
@@ -149,7 +240,7 @@ ctest --preset windows-release-tests
 - 文档、计划和任务中提到的 Linux-specific 分组，必须显式标注。
 - 这些分组在 Windows/macOS 上不能被默认为“等价完成”。
 
-## 9. Windows/macOS fallback 与 deferred 说明
+## 11. Windows/macOS fallback 与 deferred 说明
 
 当前阶段对 Windows/macOS 的要求是：
 
@@ -170,7 +261,17 @@ ctest --preset debug-tests --output-on-failure
 - 若后续需要更明确的非 Bash 入口，应由后续任务补充 `test.ps1` 或等价说明；
   当前阶段仍属于 planned fallback / deferred scope。
 
-## 10. 当前实现顺序
+## 12. manual-only / diagnostic-only 程序说明
+
+不是所有 `tests/` 下的文件都会进入受管 GTest / CTest 回归。
+
+- `persistence_more_test.cpp` 保留为 manual-only / diagnostic-only 的两阶段恢复演示程序
+- 它适合人工查看 marker、manifest 和 retained artifacts
+- 它不属于 Linux 主回归入口，也不属于 Windows platform-neutral fallback
+
+更完整的测试角色说明见 [tests/README.md](/home/yangjilei/Code/C++/CQUPT_Raft/tests/README.md)。
+
+## 13. 当前实现顺序
 
 1. 冻结已完成能力和剩余风险边界
 2. 收敛 Linux flaky 验证路径
