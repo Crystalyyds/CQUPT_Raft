@@ -3,7 +3,8 @@
 ## 目标
 
 定义维护者执行工业化验证时应使用的入口约定，并与
-[../validation-matrix.md](../validation-matrix.md) 保持一致。该约定只说明
+[../validation-matrix.md](../validation-matrix.md) 与
+[../platform-support.md](../platform-support.md) 保持一致。该约定只说明
 验证入口、解释规则和平台边界，不改变 CQUPT_Raft 的协议语义、持久化格式或
 公共 API。
 

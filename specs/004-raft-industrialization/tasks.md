@@ -399,7 +399,7 @@
   Basis: `contracts/validation-entrypoints.md` Windows/macOS wrapper contract；`plan.md` W6/W8。
   Tests To Run: 文档/脚本静态校验；Linux 上至少检查脚本文本与命令一致性，实际 Windows 运行留作 follow-up evidence。
 
-- [ ] T026 [US3] Update `tests/CMakeLists.txt` and related docs to label Linux-specific failure-injection coverage
+- [x] T026 [US3] Update `tests/CMakeLists.txt` and related docs to label Linux-specific failure-injection coverage
   Goal: 让 CTest discover 的测试和文档都能看出哪些是平台无关回归，哪些依赖 Linux-specific failure injection 或 crash-style 语义。
   Input: `tests/CMakeLists.txt`, `validation-matrix.md`, `contracts/validation-entrypoints.md`, T006-T010.
   Scope: 修改 `tests/CMakeLists.txt` 的注释/组织和 spec docs；不改业务代码。
@@ -412,7 +412,7 @@
   Basis: `plan.md` W6；`contracts/validation-entrypoints.md` Test Grouping Contract。
   Tests To Run: `ctest --preset debug-tests --output-on-failure`; `./test.sh --group all`.
 
-- [ ] T027 [P] [US3] Add `specs/004-raft-industrialization/platform-support.md`
+- [x T027 [P] [US3] Add `specs/004-raft-industrialization/platform-support.md`
   Goal: 建立平台能力矩阵，明确 build、path、flush/sync、rename、temp dir、signal/process 测试在 Linux/Windows/macOS 的当前证据与下一步。
   Input: `validation-matrix.md`, `plan.md`, `data-model.md`, top-level `CMakeLists.txt`, `test.sh`.
   Scope: 新增 spec 文档，不改生产代码。

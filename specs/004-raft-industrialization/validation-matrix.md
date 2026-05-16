@@ -12,6 +12,7 @@ cross-platform gaps are scheduled for follow-up work.
 - `specs/004-raft-industrialization/spec.md`
 - `specs/004-raft-industrialization/plan.md`
 - `specs/004-raft-industrialization/quickstart.md`
+- `specs/004-raft-industrialization/platform-support.md`
 - `specs/003-persistence-reliability/progress.md`
 - `test.sh`
 

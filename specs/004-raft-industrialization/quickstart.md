@@ -5,6 +5,7 @@
 - 功能范围与非目标：[spec.md](./spec.md)
 - 执行顺序与验收标准：[plan.md](./plan.md)
 - 风险冻结与验证矩阵：[validation-matrix.md](./validation-matrix.md)
+- 平台支持矩阵：[platform-support.md](./platform-support.md)
 
 `validation-matrix.md` 是本 feature 的单一验证基线。后续执行、rerun、平台解释和
 Linux-specific 边界，都以它为准。
