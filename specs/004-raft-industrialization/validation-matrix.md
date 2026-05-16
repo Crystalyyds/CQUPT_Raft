@@ -76,6 +76,28 @@ cross-platform gaps are scheduled for follow-up work.
 | `./test.sh --group segment-cluster` | Focused clustered segment/snapshot stress rerun | US2/US3 regression | Partially | Optional via `--keep-data` | Main segment rollover and retained-artifact stress bucket |
 | `ctest --preset debug-tests --output-on-failure` | Platform-neutral fallback | Cross-platform baseline execution contract | No | No | Must remain valid outside Bash-first flows; Linux fallback remains available alongside Windows preset path |
 
+### T026 Linux 侧确认
+
+当前 `T026` 范围内，已在 Linux 环境完成以下确认：
+
+- `cmake --preset debug-ninja-low-parallel`: PASS
+- `cmake --build --preset debug-ninja-low-parallel`: PASS
+- `ctest --preset debug-tests --output-on-failure`: FAIL
+  - `tests/CMakeLists.txt` 的现有 label contract 没有破坏 test discovery
+  - 当前失败集中在 cluster-style / runtime-heavy suites，失败类型以
+    `Subprocess aborted` 为主，因此该结果不会把
+    Linux-specific failure-injection 或 durability-boundary 重新解释成
+    platform-neutral 证据
+- `CTEST_PARALLEL_LEVEL=1 ./test.sh --group persistence`: PASS
+
+本次验证固定的解释边界：
+
+- Linux 主入口仍是 `./test.sh`
+- `debug-tests` 仍是 Linux / cross-platform 的 CTest fallback，不替代
+  Linux-primary 主验收解释
+- Windows fallback 仍是保守 baseline，不记录为 Linux-specific durability /
+  failure-injection 的等价验收证据
+
 ## CTest Label Matrix
 
 | Label | Meaning | Platform scope | Interpretation boundary |

@@ -29,6 +29,9 @@
   - `ctest --preset debug-tests --output-on-failure`
 - **约定**：
   - 这是当前跨平台 baseline fallback。
+  - 在 Linux 上，当维护者不走 `./test.sh` Bash 主入口、只需要确认
+    CTest discover / label contract、或需要更窄的 CTest 复验时，它也是
+    Linux 的 CTest fallback。
   - 它应覆盖平台无关的回归子集。
   - 它不能自动替代 Linux-specific crash-style、failure-injection 或
     `--keep-data` 证据。
@@ -148,6 +151,8 @@
 解释规则：
 
 - `ctest --preset debug-tests --output-on-failure` 仍是通用跨平台 fallback。
+- 在 Linux 上，它可以用来确认 `tests/CMakeLists.txt` 的 label 与 discover
+  行为仍可工作，但这不改变 Linux-primary / Linux-specific 的验收边界。
 - `ctest --preset windows-release-tests` 与 `ctest --preset windows-debug-tests`
   只代表 Windows platform-neutral fallback。
 - Windows test preset 当前运行的是保守 test-name 子集：
