@@ -145,7 +145,8 @@ PASS / FAIL / BLOCKED 状态，统一收敛到：
 
 - `T036`：已确认当前没有独立的 preset / discover / working directory /
   multi-config / test filter / wrapper 阻塞，可按 no-op 处理
-- `T037`：收口 Windows runtime / timing / harness 问题
+- `T037`：已对 `raft_integration_test.cpp` 收紧 Windows 长路径 harness 假设；
+  当前独立 runtime/harness 项为 `0`，原先 7 项已转交 `T041`
 - `T038`：收口 Windows election / replication / commit-apply 红灯
 - `T039`：收口 Windows snapshot / restart / catch-up 红灯
 - `T040`：收口 Windows persistence / segment / storage 红灯

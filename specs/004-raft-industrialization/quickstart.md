@@ -222,6 +222,9 @@ ctest --preset windows-release-managed-tests
 - 这条入口运行完整受管 CTest 目标集合。
 - 它只是新增的验证入口，不代表已经通过。
 - 它不等价于 Linux 当前 `104/104` managed 结果。
+- 当前若在 Windows full managed rerun 中看到
+  `FlushFileBuffers ... GetLastError=5`，应按 Windows durability 语义问题解释，
+  而不是继续当作长路径 harness 问题。
 - 当前失败明细、失败分类和受管目标状态统一见
   [windows-full-managed-failure-matrix.md](./windows-full-managed-failure-matrix.md)。
 

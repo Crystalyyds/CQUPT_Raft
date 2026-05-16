@@ -30,11 +30,11 @@
 | 分类 | 当前状态 | 失败数量 | 典型信号 | 对应后续任务 |
 |------|----------|----------|----------|--------------|
 | Windows full managed CTest entry / harness 问题 | 已确认无独立阻塞 | 0 | `104` 个受管测试都已 discover 并执行；preset / wrapper 不是“没跑起来” | T036 |
-| Windows runtime / timing / harness 问题 | FAIL | 7 | `FlushFileBuffers ... GetLastError=5`、`create temp log dir failed`、`failed to create identity file`、`no leader elected` | T037 |
+| Windows runtime / timing / harness 问题 | 已收紧当前路径假设；无独立剩余项 | 0 | `raft_integration_test.cpp` 已改用更短的 Windows 临时根路径；`create temp log dir failed` 不再是当前独立 blocker | T037 |
 | Windows election / replication / commit-apply 红灯 | FAIL | 17 | election / replication / commit-apply 断言失败，且当前不能写成 Windows 已收口 | T038 |
 | Windows snapshot / restart / catch-up 红灯 | FAIL | 18 | snapshot restore、restart replay、catch-up sequencing、diagnosis 断言失败 | T039 |
 | Windows persistence / segment / storage 红灯 | FAIL | 34 | trusted-state、meta/log publish、segment recovery、snapshot catalog/staging 断言失败 | T040 |
-| Windows durability semantics adapt-or-defer | FAIL | 9 | exact seam：`FlushFileBuffers`、directory sync、replace / rename、partial write、prune / remove | T041 |
+| Windows durability semantics adapt-or-defer | FAIL | 16 | exact seam：`FlushFileBuffers`、directory sync、replace / rename、partial write、prune / remove；当前还会阻塞部分 cluster-style 选主前持久化 | T041 |
 | 其他 / 待进一步分类 | 当前无独立项 | 0 | 当前 `85` 项都能先落到上面几类 | T036 / T037 |
 
 ## 受管目标状态矩阵
@@ -45,7 +45,7 @@
 | `test_state_machine` | PASS | 0 | N/A | N/A |
 | `test_min_heap_timer` | PASS | 0 | N/A | N/A |
 | `test_thread_pool` | PASS | 0 | N/A | N/A |
-| `test_kv_service` | FAIL | 2 | Windows runtime / timing / harness 问题 | T037 |
+| `test_kv_service` | FAIL | 2 | Windows durability semantics adapt-or-defer | T041 |
 | `test_raft_election` | FAIL | 2 | Windows election / replication / commit-apply 红灯 | T038 |
 | `test_raft_log_replication` | FAIL | 2 | Windows election / replication / commit-apply 红灯 | T038 |
 | `test_raft_commit_apply` | FAIL | 2 | Windows election / replication / commit-apply 红灯 | T038 |
@@ -53,7 +53,7 @@
 | `test_t017_leader_switch_ordering` | FAIL | 2 | Windows election / replication / commit-apply 红灯 | T038 |
 | `persistence_test` | FAIL | 12 | Windows persistence / segment / storage 红灯 | T040 |
 | `snapshot_test` | FAIL | 7 | Windows snapshot / restart / catch-up 红灯 | T039 |
-| `raft_integration_test` | FAIL | 5 | Windows runtime / timing / harness 问题 | T037 |
+| `raft_integration_test` | FAIL | 5 | Windows durability semantics adapt-or-defer | T041 |
 | `test_raft_snapshot_catchup` | FAIL | 4 | Windows snapshot / restart / catch-up 红灯 | T039 |
 | `test_raft_snapshot_restart` | FAIL | 4 | Windows snapshot / restart / catch-up 红灯 | T039 |
 | `test_raft_snapshot_diagnosis` | FAIL | 4 | Windows snapshot / restart / catch-up 红灯 | T039 |
@@ -80,16 +80,19 @@ T036 结论：
 
 ### 2. Windows runtime / timing / harness 问题
 
-这些失败优先进入 `T037`，先排除 Windows 下 cluster/runtime-heavy harness、
-timeout、路径、临时目录、进程收尾和 file-lock 假设：
+`T037` 当前没有独立剩余失败项。
 
-- `RaftKvServiceTest.SingleNodeSupportsPutGetDeleteAndStatusHealth`
-- `RaftKvServiceTest.ThreeNodeFollowerRedirectsWritesAndReadsToLeader`
-- `RaftIntegrationTest.ElectsSingleLeaderInThreeNodeCluster`
-- `RaftIntegrationTest.ReplicatesSetAndDeleteCommandsToAllNodes`
-- `RaftIntegrationTest.ElectsNewLeaderAfterCurrentLeaderStops`
-- `RaftIntegrationTest.GeneratesSnapshotMetaFileAfterEnoughAppliedLogs`
-- `RaftIntegrationTest.LaggingFollowerInstallsSnapshotAndReplaysTailDeleteAcrossCompactionBoundary`
+本轮已确认的结论：
+
+- `tests/raft_integration_test.cpp` 已在 Windows 下改用更短的临时测试根路径，
+  原先的 `create temp log dir failed: 文件名或扩展名太长` 信号不再出现。
+- 重新跑 `RaftIntegrationTest.*` 后，5 个测试仍然失败，但主信号已经统一变成
+  `FlushFileBuffers ... GetLastError=5`，不再属于纯路径/临时目录 blocker。
+- `RaftKvServiceTest.*` 重新跑后也呈现相同的 `FlushFileBuffers ... GetLastError=5`
+  主信号。
+
+因此，原先暂放在 `T037` 的 7 个失败已转交 `T041`，作为 Windows durability
+semantics adapt-or-defer 问题继续处理，而不是继续停留在 runtime/harness 桶里。
 
 ### 3. Windows election / replication / commit-apply 红灯
 
@@ -180,9 +183,17 @@ storage 恢复与路径问题：
 
 ### 6. Windows durability semantics adapt-or-defer
 
-这些 exact seam 用例优先进入 `T041`。它们不能被写成“Windows 已等价验证 Linux
-specific durability / failure-injection”：
+这些 exact seam 用例，以及当前被 `FlushFileBuffers ... GetLastError=5` 阻塞的
+cluster-style 运行时失败，优先进入 `T041`。它们不能被写成“Windows 已等价验证
+Linux-specific durability / failure-injection”：
 
+- `RaftKvServiceTest.SingleNodeSupportsPutGetDeleteAndStatusHealth`
+- `RaftKvServiceTest.ThreeNodeFollowerRedirectsWritesAndReadsToLeader`
+- `RaftIntegrationTest.ElectsSingleLeaderInThreeNodeCluster`
+- `RaftIntegrationTest.ReplicatesSetAndDeleteCommandsToAllNodes`
+- `RaftIntegrationTest.ElectsNewLeaderAfterCurrentLeaderStops`
+- `RaftIntegrationTest.GeneratesSnapshotMetaFileAfterEnoughAppliedLogs`
+- `RaftIntegrationTest.LaggingFollowerInstallsSnapshotAndReplaysTailDeleteAcrossCompactionBoundary`
 - `PersistenceTest.MetaFileSyncFailureNeedsExactFailureInjectionSeam`
 - `PersistenceTest.MetaDirectorySyncFailureNeedsExactFailureInjectionSeam`
 - `RaftSnapshotRecoveryTest.RestartAfterSnapshotPublishFailureNeedsExactFailureInjectionSeam`

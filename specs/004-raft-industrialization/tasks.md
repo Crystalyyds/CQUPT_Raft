@@ -589,6 +589,10 @@
   Windows/macOS Fallback: Yes, 这是 Windows runtime-heavy 覆盖扩大前置任务。
   Basis: `platform-support.md` Windows runtime/timing/path/file-lock 缺口；`tests/README.md` 受管目标边界。
   Tests To Run: `ctest --test-dir build/windows -C Release --output-on-failure -R '^(RaftKvServiceTest|RaftElectionTest|RaftSplitBrainTest|RaftLeaderSwitchOrderingTest|RaftIntegrationTest)\\.'`; `ctest --preset windows-release-managed-tests`.
+  Result:
+  - `tests/raft_integration_test.cpp` 已在 Windows 下切换到更短的临时测试根路径，`RaftIntegrationTest.*` 的 `create temp log dir failed: 文件名或扩展名太长` 信号已不再出现。
+  Execution Note:
+  - focused rerun 证明 `RaftIntegrationTest.*` 和 `RaftKvServiceTest.*` 当前主信号都已收敛为 `FlushFileBuffers ... GetLastError=5`，因此原先暂放在 `T037` 的 7 个失败已统一转交 `T041`；当前没有独立剩余的 runtime/harness blocker。
 
 - [ ] T038 Fix Windows election / replication / commit-apply red lights exposed by the full managed sweep
   Goal: 收口 Windows full managed CTest 中属于平台无关 Raft 逻辑的 election / replication / commit-apply 红灯，不把它们继续留在“只有 Linux 绿”的状态。

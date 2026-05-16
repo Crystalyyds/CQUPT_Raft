@@ -258,6 +258,30 @@ cross-platform gaps are scheduled for follow-up work.
   当前 `85` 项失败属于测试运行红灯，而不是 discover / preset / wrapper
   阻塞
 
+### T037 Windows Runtime / Harness Triage
+
+本次 `T037` 只处理 Windows 下 cluster/runtime-heavy 覆盖里的 harness 假设，
+不修改生产代码，也不把真实 durability 红灯伪装成 timeout/cleanup 修复。
+
+本次最小变更与 focused rerun 结果：
+
+- `tests/raft_integration_test.cpp` 已在 Windows 下改用更短的临时测试根路径，
+  以消除 `create temp log dir failed: 文件名或扩展名太长` 这一类长路径 blocker。
+- `ctest --test-dir build/windows -C Release --output-on-failure -R '^RaftIntegrationTest\.'`
+  仍为 `FAIL`，但当前 5 个失败已不再表现为长路径建目录失败，而是统一暴露为
+  `FlushFileBuffers ... GetLastError=5`。
+- `ctest --test-dir build/windows -C Release --output-on-failure -R '^RaftKvServiceTest\.'`
+  仍为 `FAIL`；其中 2 个失败用例与上面呈现相同的
+  `FlushFileBuffers ... GetLastError=5` 主信号，`DataDirectoryIdentityMismatchIsRejected`
+  仍保持 `PASS`。
+
+当前 T037 结论：
+
+- Windows 长路径 harness 假设已对 `RaftIntegrationTest.*` 做到最小收紧。
+- 原先暂放在 `T037` 的 7 个失败，当前已没有独立的 runtime/harness blocker。
+- 这 7 个失败统一转交 `T041`，按 Windows durability semantics
+  adapt-or-defer 继续处理。
+
 T036 当前结论：
 
 - `confirmed no entry blocker / no-op`
