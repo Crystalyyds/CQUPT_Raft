@@ -40,6 +40,28 @@ macOS 当前不在本 feature 验证范围内。
 
 这些目标构成当前维护者应优先使用的受管回归集合。
 
+对应参与受管 GTest / CTest 的测试源文件是：
+
+- `test_command.cpp`
+- `test_state_machine.cpp`
+- `test_min_heap_timer.cpp`
+- `test_thread_pool.cpp`
+- `test_kv_service.cpp`
+- `test_raft_election.cpp`
+- `test_raft_log_replication.cpp`
+- `test_raft_commit_apply.cpp`
+- `test_raft_split_brain.cpp`
+- `test_t017_leader_switch_ordering.cpp`
+- `persistence_test.cpp`
+- `snapshot_test.cpp`
+- `raft_integration_test.cpp`
+- `test_raft_snapshot_catchup.cpp`
+- `test_raft_snapshot_restart.cpp`
+- `test_raft_snapshot_diagnosis.cpp`
+- `test_raft_segment_storage.cpp`
+- `test_snapshot_storage_reliability.cpp`
+- `test_raft_replicator_behavior.cpp`
+
 ## 2. 受管回归的解释分层
 
 ### platform-neutral baseline
@@ -152,9 +174,18 @@ macOS 当前不在本 feature 验证范围内。
 - 不声明 Windows 已等价验证 Linux-specific durability /
   failure-injection。
 
-## 5. manual-only / diagnostic-only 程序
+## 5. manual-only / diagnostic-only / temporary 文件
 
-当前明确保留为 manual-only / diagnostic-only 的程序是：
+当前 `tests/` 目录里，不属于受管 GTest / CTest 回归入口、也不应作为正式验收
+资产解释的文件有两类：
+
+- manual-only / diagnostic-only：`persistence_more_test.cpp`
+- temporary test file：`test_temp.cpp`
+
+它们当前都没有在 `tests/CMakeLists.txt` 中通过 `add_raft_gtest(...)`
+注册，因此都不参与 CTest，也不进入 Windows platform-neutral fallback。
+
+### `persistence_more_test.cpp`
 
 - `persistence_more_test.cpp`
 
@@ -169,6 +200,16 @@ macOS 当前不在本 feature 验证范围内。
 
 - `RaftSnapshotDiagnosisTest.RestartedSingleNodeLoadsSnapshotAndTailLogsWithoutPeers`
 - `RaftSnapshotDiagnosisTest.CompactedClusterReplicatesNewLogAfterRestartedLeaderStepsDown`
+
+### `test_temp.cpp`
+
+`test_temp.cpp` 当前应解释为 temporary test file：
+
+- 文件内部使用了 GTest 形式，但当前没有纳入 `tests/CMakeLists.txt`
+- 不参与受管 CTest 回归
+- 不属于 Windows platform-neutral fallback
+- 不应作为正式验收资产或正式回归入口
+- 如果后续需要清理、删除或迁移，应作为 follow-up 单独处理，不在当前任务执行
 
 ## 6. Linux 主入口与失败排障
 

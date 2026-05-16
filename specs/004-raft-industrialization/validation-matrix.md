@@ -352,5 +352,10 @@ Current US2 status:
   text snapshots/manifests. It is not part of CTest because it depends on
   re-running the same executable across phases and human inspection of retained
   artifacts.
+- `tests/test_temp.cpp` is currently treated as a temporary test file. Although
+  it uses GTest form, it is not registered by `tests/CMakeLists.txt`, does not
+  participate in managed CTest regression, and must not be interpreted as a
+  formal acceptance asset. Any cleanup, deletion, or migration stays in
+  follow-up work and is not executed in this scope.
 - This document does not authorize any production-code rewrite. It only freezes
   scope and validation expectations for the remaining industrialization work.
