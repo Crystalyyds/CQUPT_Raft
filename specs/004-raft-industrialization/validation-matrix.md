@@ -40,7 +40,7 @@ cross-platform gaps are scheduled for follow-up work.
 | P1 | Catch-up after lag, compaction, restart, and snapshot handoff | Implemented but needs stronger proof | `plan.md` W4, current gap classification `B/C` | `./test.sh --group snapshot-catchup`, `integration`, `replicator` | No | Same tests should remain runnable via CTest |
 | P1 | Leader switch and commit/apply ordering under churn | Implemented but still risky | `plan.md` W4, current gap classification `B/C` | `./test.sh --group replication`, `election`, `replicator` | No | Same tests should remain runnable via CTest |
 | P1 | State-machine apply/replay consistency after snapshot/restart | Implemented but needs stronger proof | `plan.md` W5 | `./test.sh --group snapshot-recovery`, targeted `ctest -R` on state machine and integration tests | No | Same tests should remain runnable via CTest |
-| P2 | Unified validation entrypoints and grouped test guidance | Windows preset-based fallback and PowerShell wrapper added | Current `test.sh`, `test.ps1`, `CMakePresets.json`, `plan.md` W6 | `./test.sh --group all`, `.\test.ps1 -All`, `ctest --preset debug-tests`, `ctest --preset windows-tests` | Partially | PowerShell fallback is now available; Linux-specific runtime evidence still requires explicit boundary notes |
+| P2 | Unified validation entrypoints and grouped test guidance | Windows preset-based fallback and PowerShell wrapper added | Current `test.sh`, `test.ps1`, `CMakePresets.json`, `plan.md` W6 | `./test.sh --group all`, `.\test.ps1 -All`, `ctest --preset debug-tests`, `ctest --preset windows-release-tests`, `ctest --preset windows-debug-tests` | Partially | PowerShell fallback is now available; Windows test preset 已收敛到 `platform-neutral-fallback` 保守子集，当前通过保守 test-name 子集落实，Linux-specific runtime evidence 仍需显式边界说明 |
 | P3 | Failure localization and platform-support documentation | Incomplete | `plan.md` W7/W8 | Spec docs and grouped rerun commands | Partially | Explicit support matrix and follow-up notes required |
 | P4 | Windows/macOS deeper runtime validation and CI expansion | Deferred follow-up | `spec.md` platform scope, `plan.md` W8 | Future runtime validation | No | This row is itself the fallback and follow-up definition |
 
@@ -62,9 +62,11 @@ cross-platform gaps are scheduled for follow-up work.
 | `cmake --preset debug-ninja-low-parallel` | Primary low-parallel configure | Linux primary build path | No | No | Current preferred configure entry |
 | `cmake --build --preset debug-ninja-low-parallel` | Primary low-parallel build | Linux primary build path | No | No | Current preferred build entry |
 | `cmake --preset windows` | Windows configure fallback | Windows platform-neutral baseline setup | No | No | Existing Visual Studio 17 2022 configure preset remains unchanged |
-| `cmake --build --preset windows-release` | Windows low-parallel build fallback | Windows platform-neutral baseline build | No | No | Uses `configurePreset: windows`, `configuration: Release`, `jobs: 2` |
-| `ctest --preset windows-tests` | Windows low-parallel test fallback | Windows platform-neutral baseline execution | No | No | Uses `configuration: Release`, `execution.jobs: 1`, `outputOnFailure: true`; does not claim Linux-specific runtime equivalence |
-| `.\test.ps1 -All` | Windows PowerShell fallback wrapper | Windows platform-neutral one-command validation | No | No | Wraps `windows` / `windows-release` / `windows-tests`; does not run Linux-specific groups |
+| `cmake --build --preset windows-release` | Windows Release build fallback | Windows platform-neutral baseline build | No | No | Uses `configurePreset: windows`, `configuration: Release` |
+| `ctest --preset windows-release-tests` | Windows Release test fallback | Windows platform-neutral baseline execution | No | No | Uses `configuration: Release`; current subset is `CommandTest|KvStateMachineTest|TimerSchedulerTest|ThreadPoolTest` |
+| `cmake --build --preset windows-debug` | Windows Debug build fallback | Optional Windows platform-neutral debug build | No | No | Uses `configurePreset: windows`, `configuration: Debug` |
+| `ctest --preset windows-debug-tests` | Windows Debug test fallback | Optional Windows platform-neutral debug execution | No | No | Uses `configuration: Debug`; current subset is `CommandTest|KvStateMachineTest|TimerSchedulerTest|ThreadPoolTest` |
+| `.\test.ps1 -All` | Windows PowerShell fallback wrapper | Windows platform-neutral one-command validation | No | No | Default flow wraps `windows` / `windows-release` / `windows-release-tests`; current test subset is conservative and does not run Linux-specific groups |
 | `CTEST_PARALLEL_LEVEL=1 ./test.sh --group all` | Primary regression sweep | Linux primary validation | Partially | Optional via `--keep-data` | Includes grouped Linux execution flow |
 | `./test.sh --group persistence` | Focused restart/durability rerun | Industrialization hotspot | Partially | Optional via `--keep-data` | Main trusted-state regression bucket |
 | `./test.sh --group snapshot-recovery` | Focused snapshot/restart rerun | Industrialization hotspot | Partially | Optional via `--keep-data` | Current flaky blocker area |
@@ -73,6 +75,28 @@ cross-platform gaps are scheduled for follow-up work.
 | `./test.sh --group replicator` | Focused replicator rerun | US2 regression | No | Optional via `--keep-data` | Follower synchronization evidence |
 | `./test.sh --group segment-cluster` | Focused clustered segment/snapshot stress rerun | US2/US3 regression | Partially | Optional via `--keep-data` | Main segment rollover and retained-artifact stress bucket |
 | `ctest --preset debug-tests --output-on-failure` | Platform-neutral fallback | Cross-platform baseline execution contract | No | No | Must remain valid outside Bash-first flows; Linux fallback remains available alongside Windows preset path |
+
+## CTest Label Matrix
+
+| Label | Meaning | Platform scope | Interpretation boundary |
+|-------|---------|----------------|-------------------------|
+| `platform-neutral` | 跨平台基础回归语义 | Linux / Windows / macOS fallback 均可用于逻辑回归 | 不自动声明 Linux-specific runtime 证据 |
+| `platform-neutral-fallback` | 保守的跨平台 fallback baseline 子集 | 当前 Windows preset / PowerShell fallback 的默认执行范围 | 不代表整个 `platform-neutral` 语义桶都已在 Windows 纳入验收 |
+| `durability-boundary` | restart / trusted-state / crash-style / durability boundary 语义 | 可通过 CTest 运行，但平台解释必须更谨慎 | 若同时带 Linux-specific 标签，则跨平台 fallback 只证明逻辑回归 |
+| `linux-specific-failure-injection` | exact `fsync`、directory sync、replace/rename、prune/remove、partial write failure-injection 覆盖 | Linux-specific runtime evidence | Windows 侧 fallback 不声称等价注入语义 |
+| `linux-primary-diagnosis` | Linux-primary diagnosis / retained-artifact / stress bucket | Linux-primary operational interpretation | Windows / 非 Bash fallback 不等价于该类诊断证据 |
+
+Windows preset 过滤边界说明：
+
+- `windows-release-tests` / `windows-debug-tests` 当前只运行保守 test-name
+  子集：`CommandTest`、`KvStateMachineTest`、`TimerSchedulerTest`、
+  `ThreadPoolTest`。
+- 由于当前粒度是 executable label 而不是单条 test case label，Windows
+  fallback 采用保守子集策略：只有明确打上 `platform-neutral-fallback` 的
+  语义才进入默认 preset 的解释范围；当前运行实现通过 test-name 子集落地。
+- 因此 Windows baseline 只证明保守的 platform-neutral fallback 子集可运行，
+  不声明“所有带有部分 platform-neutral 逻辑的 executable 都已在 Windows
+  纳入验收”。
 
 ## `test.sh` Section Map
 
@@ -128,6 +152,8 @@ cross-platform runtime proof:
   prune, and partial-write boundaries
 - Any future crash-style or process/signal-oriented failure harness
 - Bash-first orchestration through `test.sh`
+- Any executable or CTest-discovered case carrying the
+  `linux-specific-failure-injection` or `linux-primary-diagnosis` label
 
 For these areas, Windows/macOS follow-up must either:
 
@@ -135,8 +161,9 @@ For these areas, Windows/macOS follow-up must either:
   regression, or
 - on Windows, use `cmake --preset windows`,
   `cmake --build --preset windows-release`, and
-  `ctest --preset windows-tests` for platform-neutral configure/build/test
-  fallback without over-claiming Linux-specific semantics, or
+  `ctest --preset windows-release-tests` for platform-neutral
+  configure/build/test fallback without over-claiming Linux-specific
+  semantics, or
 - remain explicitly deferred until runtime validation exists.
 
 ## US1 Accepted Restart Recovery Evidence
@@ -145,7 +172,7 @@ For these areas, Windows/macOS follow-up must either:
 |---------------|-------------------|------------|---------------|----------------|
 | Hard-state and log-boundary restart matrix | old-meta/new-log, new-meta/old-log, commit/apply clamp, missing first segment, final segment tail truncate 后 trusted log prefix 选择 | `CTEST_PARALLEL_LEVEL=1 ctest --test-dir build --output-on-failure -R '^(PersistenceTest|RaftSegmentStorageTest)\.'` | PASS | 平台无关恢复逻辑证据；如涉及 exact durability 边界，则由 Linux-specific 注入测试补充 |
 | Snapshot metadata and applied-state restart matrix | invalid snapshot rejection, all-invalid fallback, metadata mismatch, corrupted newest snapshot fallback, trusted snapshot 选择后一致的 applied replay | `CTEST_PARALLEL_LEVEL=1 ctest --test-dir build --output-on-failure -R '^(RaftSnapshotRecoveryTest|RaftSnapshotDiagnosisTest)\.'` | PASS | 平台无关恢复逻辑证据 |
-| Linux-specific durability failure injection and diagnostics | meta/log/snapshot 的 file sync、directory sync、replace/rename、prune/remove、partial write 边界及对应 trusted-state 预期 | `CTEST_PARALLEL_LEVEL=1 ctest --test-dir build --output-on-failure -R '^(PersistenceTest|RaftSegmentStorageTest|SnapshotStorageReliabilityTest|RaftSnapshotRecoveryTest)\.'` | PASS | Linux-specific runtime evidence；Windows/macOS 仅保留逻辑回归 fallback，不声称等价注入语义 |
+| Linux-specific durability failure injection and diagnostics | meta/log/snapshot 的 file sync、directory sync、replace/rename、prune/remove、partial write 边界及对应 trusted-state 预期 | `CTEST_PARALLEL_LEVEL=1 ctest --test-dir build --output-on-failure -R '^(PersistenceTest|RaftSegmentStorageTest|SnapshotStorageReliabilityTest|RaftSnapshotRecoveryTest)\.'` | PASS | Linux-specific runtime evidence；对应 executable 在 CTest 中应带 `linux-specific-failure-injection` 与 `durability-boundary` 标签；Windows 侧仅保留 platform-neutral fallback，不声称等价注入语义 |
 
 Current US1 status:
 
